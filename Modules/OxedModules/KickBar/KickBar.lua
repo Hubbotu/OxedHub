@@ -128,15 +128,23 @@ local function IsGlobalCooldownOnly(spellID)
     return (GetTime() - lastInterruptAt) > (baseMs / 1000)
 end
 
+-- Named, not written inline: this runs on every tick while the target casts.
+local function CooldownActive(spellID)
+    local info = C_Spell.GetSpellCooldown(spellID)
+    if type(info) ~= "table" or info.isActive == nil then return nil end
+    return info.isActive == true
+end
+
+local function ReadyFromNumbers(start, duration)
+    if not start or start == 0 or not duration or duration == 0 then return true end
+    return duration <= 1.5
+end
+
 local function IsInterruptReady()
     if not interruptSpellID then return false end
 
     if C_Spell and C_Spell.GetSpellCooldown then
-        local ok, active = pcall(function()
-            local info = C_Spell.GetSpellCooldown(interruptSpellID)
-            if type(info) ~= "table" or info.isActive == nil then return nil end
-            return info.isActive == true
-        end)
+        local ok, active = pcall(CooldownActive, interruptSpellID)
         if ok and active ~= nil then
             if active and IsGlobalCooldownOnly(interruptSpellID) then active = false end
             return not active
@@ -145,10 +153,7 @@ local function IsInterruptReady()
 
     -- Clients without isActive: the numbers are readable there.
     local start, duration = GetSpellCooldownCompat(interruptSpellID)
-    local ok, ready = pcall(function()
-        if not start or start == 0 or not duration or duration == 0 then return true end
-        return duration <= 1.5
-    end)
+    local ok, ready = pcall(ReadyFromNumbers, start, duration)
     if ok then return ready end
 
     -- Nothing readable at all. Not ready is the safe answer: greying out a
@@ -387,6 +392,34 @@ end
 -- at all -- which /oxprofile showed as one call per frame, all session. A cast
 -- starting on the target wakes it (see the events at the bottom of the file),
 -- and the first tick that finds nothing to watch puts it back to sleep.
+-- Both used through pcall on every tick while the target casts. They used to
+-- be written inline, which made two new functions every tick: /oxprofile
+-- counted 9.6 MB of garbage from this loop in half an hour of dungeon.
+local function IsTrue(value) return value == true end
+
+local function Visible(frame)
+    return frame and frame.IsVisible and frame:IsVisible()
+end
+
+local function CastbarShielded()
+    -- 1. Default UI Target Frame
+    if Visible(TargetFrameSpellBar) and Visible(TargetFrameSpellBar.BorderShield) then
+        return true
+    end
+    -- 2. Default UI Nameplates
+    local np = C_NamePlate and C_NamePlate.GetNamePlateForUnit("target")
+    local blizzard = np and np.UnitFrame and np.UnitFrame.CastBar
+    if Visible(blizzard) and Visible(blizzard.BorderShield) then return true end
+    -- 3. Plater Nameplates
+    local plater = np and np.unitFrame and np.unitFrame.castBar
+    if Visible(plater) and Visible(plater.Shield) then return true end
+    -- 4. ElvUI Target Frame
+    if ElvUF_Target and Visible(ElvUF_Target.Castbar) and ElvUF_Target.Castbar.notInterruptible then
+        return true
+    end
+    return false
+end
+
 local function Sleep(frame)
     HideKick()
     frame:SetScript("OnUpdate", nil)
@@ -442,45 +475,13 @@ local function OnUpdate(self, dt)
 
     local safeNotInterruptible = false
     do
-        local ok, val = pcall(function() return notInterruptible == true end)
+        local ok, val = pcall(IsTrue, notInterruptible)
         if ok then
             safeNotInterruptible = val
         else
             -- A secret: read the castbars, for the sound only.
-            local isShielded = false
-
-            pcall(function()
-                -- 1. Default UI Target Frame
-                if TargetFrameSpellBar and TargetFrameSpellBar.IsVisible and TargetFrameSpellBar:IsVisible() then
-                    if TargetFrameSpellBar.BorderShield and TargetFrameSpellBar.BorderShield.IsVisible and TargetFrameSpellBar.BorderShield:IsVisible() then
-                        isShielded = true
-                    end
-                end
-
-                -- 2. Default UI Nameplates
-                local np = C_NamePlate and C_NamePlate.GetNamePlateForUnit("target")
-                if not isShielded and np and np.UnitFrame and np.UnitFrame.CastBar and np.UnitFrame.CastBar.IsVisible and np.UnitFrame.CastBar:IsVisible() then
-                    if np.UnitFrame.CastBar.BorderShield and np.UnitFrame.CastBar.BorderShield.IsVisible and np.UnitFrame.CastBar.BorderShield:IsVisible() then
-                        isShielded = true
-                    end
-                end
-
-                -- 3. Plater Nameplates
-                if not isShielded and np and np.unitFrame and np.unitFrame.castBar and np.unitFrame.castBar.IsVisible and np.unitFrame.castBar:IsVisible() then
-                    if np.unitFrame.castBar.Shield and np.unitFrame.castBar.Shield.IsVisible and np.unitFrame.castBar.Shield:IsVisible() then
-                        isShielded = true
-                    end
-                end
-
-                -- 4. ElvUI Target Frame
-                if not isShielded and ElvUF_Target and ElvUF_Target.Castbar and ElvUF_Target.Castbar.IsVisible and ElvUF_Target.Castbar:IsVisible() then
-                    if ElvUF_Target.Castbar.notInterruptible then
-                        isShielded = true
-                    end
-                end
-            end)
-
-            safeNotInterruptible = isShielded
+            local okShield, shielded = pcall(CastbarShielded)
+            safeNotInterruptible = okShield and shielded or false
         end
     end
 

@@ -25,6 +25,17 @@ local KIND_COLORS = {
 -- changed in between.
 WhatsNew.RELEASES = {
     {
+        version = "2.3.90",
+        important = true,
+        lines = {
+            { "CHANGED", "OxedHub makes far less memory garbage in a fight, which means fewer pauses when the game clears it. Buff Reminder dropped from 33 KB to almost nothing per refresh, and the aura scan, the trigger rules, Bloodlust, My Buff, Kick Bar and Action Hub each lost most of theirs." },
+            { "FIXED", "Threat Bar made a new bar for every nameplate that appeared and never reused it, so a long session piled up hundreds of them. The bars are handed out again now." },
+            { "ADDED", "Performance report (/oxprofile): every lag now shows the seconds before and after it, with the frame rate, the worst frame, OxedHub's share and the memory, so you can see whether it was building up." },
+            { "ADDED", "Performance report: lags less than two seconds apart are counted as one stutter, with its length, its worst frame and the cause most of it shares." },
+            { "CHANGED", "Action Hub redraws only the item buttons when an item cooldown changes, and Prey Hunt stays quiet inside dungeons." },
+        },
+    },
+    {
         version = "2.3.89",
         important = true,
         lines = {

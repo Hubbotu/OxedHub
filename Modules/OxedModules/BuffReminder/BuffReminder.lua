@@ -121,6 +121,49 @@ local function FindAura(unit, ids)
     return false
 end
 
+-- ── Remembered answers ──────────────────────────────────────────────────────
+-- /oxprofile showed a refresh costing 1.1 ms and 33 KB of garbage: every
+-- refresh asked the game again for every raid buff on every group member, and
+-- each answer that finds an aura is a new table. The answer only changes when
+-- that unit's auras change, so it is kept per unit, per entry, until UNIT_AURA
+-- for that unit says otherwise. The time left is kept as the moment it runs
+-- out, so a remembered answer still counts down.
+--
+-- ⚠ "cannot tell" (a secret, in combat) is never remembered: the next refresh
+-- must ask again rather than keep a guess.
+
+local auraCache = {}       -- unit -> { [ids] = expiresAt, or 0 for none, or -1 for no end }
+
+local function ForgetUnit(unit)
+    local cache = auraCache[unit]
+    if cache then wipe(cache) end
+end
+
+local function ForgetAllUnits()
+    for _, cache in pairs(auraCache) do wipe(cache) end
+end
+
+local function FindAuraCached(unit, ids)
+    local cache = auraCache[unit]
+    if not cache then
+        cache = {}
+        auraCache[unit] = cache
+    end
+    local known = cache[ids]
+    if known ~= nil then
+        if known == 0 then return false end
+        if known == -1 then return true, nil end
+        return true, known - GetTime()
+    end
+    local found, left = FindAura(unit, ids)
+    if found == false then
+        cache[ids] = 0
+    elseif found then
+        cache[ids] = left and (GetTime() + left) or -1
+    end
+    return found, left
+end
+
 -- Food buffs share no spell ID, and in Midnight not always the old food icon
 -- either (a delve showed "needs food" with Well Fed up). What they do share is
 -- the name -- "Well Fed", "Hearty Well Fed" -- in the client's own language,
@@ -191,7 +234,22 @@ local function WeaponEnchants(ids)
 end
 
 -- Permanent enchants (runeforges) sit in the item link: item:ID:enchantID:...
+-- The tooltip fallback below builds the whole tooltip as tables, so the answer
+-- is kept until either weapon's link changes.
+local enchantLinks, enchantAnswer = {}, nil
+local PermanentEnchantNow
+
 local function PermanentEnchant(ids)
+    local main, off = GetInventoryItemLink("player", 16), GetInventoryItemLink("player", 17)
+    if enchantAnswer ~= nil and enchantLinks[1] == main and enchantLinks[2] == off then
+        return enchantAnswer
+    end
+    enchantLinks[1], enchantLinks[2] = main, off
+    enchantAnswer = PermanentEnchantNow(ids)
+    return enchantAnswer
+end
+
+PermanentEnchantNow = function(ids)
     for _, slot in ipairs({ 16, 17 }) do
         local link = GetInventoryItemLink("player", slot)
         local enchant = link and tonumber(link:match("item:%d+:(%d*)"))
@@ -224,13 +282,14 @@ end
 
 -- ── Who is in the group, and in reach ──────────────────────────────────────
 
-local function ForEachGroupUnit(fn)
-    if IsInRaid() then
-        for i = 1, GetNumGroupMembers() do fn("raid" .. i) end
-    else
-        fn("player")
-        for i = 1, GetNumSubgroupMembers() do fn("party" .. i) end
-    end
+local RAID_UNITS, PARTY_UNITS = {}, { "player" }
+for i = 1, 40 do RAID_UNITS[i] = "raid" .. i end
+for i = 1, 4 do PARTY_UNITS[i + 1] = "party" .. i end
+
+-- The unit list and how many of it are in use; made once, never per refresh.
+local function GroupUnits()
+    if IsInRaid() then return RAID_UNITS, math.min(40, GetNumGroupMembers()) end
+    return PARTY_UNITS, 1 + math.min(4, GetNumSubgroupMembers())
 end
 
 local function Countable(unit)
@@ -277,13 +336,15 @@ local function IsWeapon(slot)
 end
 
 local function GroupHasClass(wanted)
-    local present = false
-    ForEachGroupUnit(function(unit)
-        if present or not UnitExists(unit) then return end
-        local _, class = UnitClass(unit)
-        if class == wanted then present = true end
-    end)
-    return present
+    local units, count = GroupUnits()
+    for i = 1, count do
+        local unit = units[i]
+        if UnitExists(unit) then
+            local _, class = UnitClass(unit)
+            if class == wanted then return true end
+        end
+    end
+    return false
 end
 
 -- ── Deciding what to show ───────────────────────────────────────────────────
@@ -306,7 +367,7 @@ local function Applies(entry, class, specID)
     if entry.notAura then
         -- The one-id list is made once per entry, not on every check.
         entry._notAuraList = entry._notAuraList or { entry.notAura }
-        if FindAura("player", entry._notAuraList) then return false end
+        if FindAuraCached("player", entry._notAuraList) then return false end
     end
     return true
 end
@@ -341,17 +402,20 @@ end
 
 local function EvaluateRaid(entry, out)
     local missing, names, soonest = 0, nil, nil
-    ForEachGroupUnit(function(unit)
-        if not Countable(unit) then return end
-        local has, remaining = FindAura(unit, entry.auras)
-        if has == false then
-            missing = missing + 1
-            names = names or {}
-            names[#names + 1] = UnitName(unit)
-        elseif has and remaining and (not soonest or remaining < soonest) then
-            soonest = remaining
+    local units, count = GroupUnits()
+    for i = 1, count do
+        local unit = units[i]
+        if Countable(unit) then
+            local has, remaining = FindAuraCached(unit, entry.auras)
+            if has == false then
+                missing = missing + 1
+                names = names or {}
+                names[#names + 1] = UnitName(unit)
+            elseif has and remaining and (not soonest or remaining < soonest) then
+                soonest = remaining
+            end
         end
-    end)
+    end
     local spell = CastSpellFor(entry)
     if missing > 0 then
         Add(out, entry, { texture = SpellTexture(spell), count = missing, names = names, spell = spell })
@@ -416,7 +480,7 @@ local function EvaluateBuffItem(entry, out)
     if entry.check == "food" then
         found, left = FindFood()
     else
-        found, left = FindAura("player", entry.auras)
+        found, left = FindAuraCached("player", entry.auras)
     end
     if not Needed(found, left) then return end
     local timeLeft = found and left or nil
@@ -527,7 +591,7 @@ local function Evaluate(entry, specID, inInstance, forced, out)
     elseif entry.enchants then
         found, left = WeaponEnchants(entry.enchants)
     else
-        found, left = FindAura("player", entry.auras)
+        found, left = FindAuraCached("player", entry.auras)
     end
     if not Needed(found, left) then return end
     local spell = CastSpellFor(entry)
@@ -555,7 +619,12 @@ local function Collect()
         if not enabled or (needsPlace and not groupAllowed) then return end
         for _, entry in ipairs(entries) do
             if #list >= MAX_BUTTONS then return end
-            if settings["hide_" .. entry.key] ~= true and Applies(entry, class, specID) then
+            local hideKey = entry._hideKey
+            if not hideKey then
+                hideKey = "hide_" .. entry.key
+                entry._hideKey = hideKey
+            end
+            if settings[hideKey] ~= true and Applies(entry, class, specID) then
                 Evaluate(entry, specID, inInstance, forced, list)
             end
         end
@@ -799,11 +868,16 @@ local EVENTS = {
 
 watcher:SetScript("OnEvent", function(_, event, unit)
     if event == "UNIT_AURA" then
-        -- Auras change constantly in combat; the bar is hidden then anyway.
+        -- Forgotten even in combat, so the answer after the fight is fresh;
+        -- the bar itself is hidden in combat and is not rebuilt then.
+        if unit then ForgetUnit(unit) end
         if InCombatLockdown() then return end
         if unit ~= "player" and unit ~= "pet" and not (unit and (unit:find("^party") or unit:find("^raid"))) then
             return
         end
+    elseif event == "GROUP_ROSTER_UPDATE" or event == "PLAYER_ENTERING_WORLD" then
+        -- raid3 may be somebody else now.
+        ForgetAllUnits()
     elseif event == "READY_CHECK" then
         if settings.readyCheck then
             readyCheckUntil = GetTime() + READY_CHECK_SECONDS

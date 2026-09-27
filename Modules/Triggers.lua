@@ -416,7 +416,7 @@ end
 -- The spell is the more useful name when there is one: "Power Infusion" says
 -- more than "My Buff (by Spell ID)".
 local function DescribeTrigger(trigger)
-    local conditions = trigger.conditions or {}
+    local conditions = trigger.conditions or NO_CONDITIONS
     local spellID = conditions.spellID or conditions.spellId
 
     if spellID and C_Spell and C_Spell.GetSpellInfo then
@@ -1010,6 +1010,64 @@ function Triggers:ProcessEvent(eventType, eventData)
     end
 end
 
+-- ── Matching without garbage ────────────────────────────────────────────────
+-- Every rule is checked against every event, so whatever a check makes is made
+-- rules x events times: /oxprofile showed 3 KB for each UNIT_AURA. The checks
+-- below used to build a new little function for each pcall, turn both ids into
+-- strings to compare them, lower-case the rule's aura name every time, ask the
+-- game for an aura table the aura scan had already seen, and compile a custom
+-- condition afresh on every event. The answers are the same; the waste is gone.
+
+local NO_CONDITIONS = {}   -- shared, read only
+
+local function SameID(a, b) return tostring(a) == tostring(b) end
+local function SameName(a, b)
+    if a == b then return true end
+    return string.lower(a) == string.lower(tostring(b))
+end
+local function NameHas(name, needle)
+    return name:lower():find(needle, 1, true) ~= nil
+end
+
+-- A plain number is compared as a number; anything else (a secret, a string)
+-- goes the old way, inside pcall.
+local function IDMatches(expected, actual)
+    if type(actual) == "number" and not (issecretvalue and issecretvalue(actual)) then
+        return actual == expected
+    end
+    local ok, res = pcall(SameID, expected, actual)
+    return ok and res
+end
+
+local lowerNeedles = {}
+local function Needle(text)
+    local lower = lowerNeedles[text]
+    if not lower then
+        lower = text:lower()
+        lowerNeedles[text] = lower
+    end
+    return lower
+end
+
+-- The aura scan already knows which spells are on the player
+-- (Core.activeSpellIDs); only when it has nothing is the game asked, and
+-- each answer from the game is a new table.
+local function PlayerHasAura(spellID)
+    local active = OxedHub.Core and OxedHub.Core.activeSpellIDs
+    if active and active[spellID] then return true end
+    if C_UnitAuras.GetAuraDataBySpellID then
+        local ok, aura = pcall(C_UnitAuras.GetAuraDataBySpellID, "player", spellID)
+        if ok and aura then return true end
+    end
+    if C_UnitAuras.GetPlayerAuraBySpellID then
+        local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, spellID)
+        if ok and aura then return true end
+    end
+    return false
+end
+
+local compiledConditions = {}   -- the custom condition's text -> its function, or false
+
 -- Check if trigger should fire
 function Triggers:ShouldTrigger(trigger, eventType, eventData)
     -- Check event type match (allow SELF_AURA triggers to match UNIT_AURA events)
@@ -1017,7 +1075,7 @@ function Triggers:ShouldTrigger(trigger, eventType, eventData)
     if not isTypeMatch then
         return false
     end
-    
+
     -- Check zone restrictions
     if not self:CheckZoneRestrictions(trigger.zones) then
         return false
@@ -1032,13 +1090,13 @@ function Triggers:ShouldTrigger(trigger, eventType, eventData)
     if not self:CheckSpecRestrictions(trigger.specs) then
         return false
     end
-    
+
     -- Check conditions
     local conditions = trigger.conditions or {}
-    
+
     -- Spell/Aura specific conditions (only evaluate if eventData has related fields)
     if eventData.spellID or eventData.spellName or eventType == "UNIT_AURA" or eventType == "UNIT_SPELLCAST_SUCCEEDED" or eventType == "CD_READY" or eventType:find("INTERRUPT") or eventType == "SPELL_INTERRUPTED" or eventType == "CONTROL_LOST" then
-        
+
         -- Prevent unconfigured triggers from firing on every single spell/aura event
         -- NOTE: SPELL_INTERRUPTED is deliberately NOT in this list. It only fires
         -- when the player's own cast is actually interrupted (rare, not spammy),
@@ -1057,30 +1115,18 @@ function Triggers:ShouldTrigger(trigger, eventType, eventData)
         if conditions.spellID and conditions.spellID ~= "" then
             local targetID = tonumber(conditions.spellID)
             local matched = false
-            
+
             -- 1. Try numeric/string equality comparison
             if eventData.spellID and targetID then
-                local expectedStr = tostring(targetID)
-                local actualStr = tostring(eventData.spellID)
-                local ok, res = pcall(function() return expectedStr == actualStr end)
-                if ok and res then matched = true end
+                if IDMatches(targetID, eventData.spellID) then matched = true end
             end
-            
+
             -- 2. Match by spell name via C_Spell.GetSpellInfo(targetID) (safe against secret strings)
             if not matched and targetID and eventData.spellName then
                 local expectedName = SpellNameOf(targetID)
                 if expectedName then
-                    local okEq, resEq = pcall(function() return expectedName == eventData.spellName end)
-                    if okEq and resEq then
-                        matched = true
-                    else
-                        local okLower, resLower = pcall(function() 
-                            return string.lower(expectedName) == string.lower(tostring(eventData.spellName)) 
-                        end)
-                        if okLower and resLower then
-                            matched = true
-                        end
-                    end
+                    local okName, same = pcall(SameName, expectedName, eventData.spellName)
+                    if okName and same then matched = true end
                 end
             end
 
@@ -1096,82 +1142,59 @@ function Triggers:ShouldTrigger(trigger, eventType, eventData)
                 and not eventType:find("INTERRUPT")
             if not matched and targetID and C_UnitAuras and auraFallbackAllowed
                 and not (eventData and eventData.isLost) then
-                if C_UnitAuras.GetAuraDataBySpellID then
-                    local ok, aura = pcall(C_UnitAuras.GetAuraDataBySpellID, "player", targetID)
-                    if ok and aura then matched = true end
-                end
-                if not matched and C_UnitAuras.GetPlayerAuraBySpellID then
-                    local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, targetID)
-                    if ok and aura then matched = true end
-                end
+                if PlayerHasAura(targetID) then matched = true end
             end
 
             -- 4. Check extra spell IDs if configured
             if not matched and conditions.extraSpellIDs then
                 for _, sid in ipairs(conditions.extraSpellIDs) do
                     local extraID = tonumber(sid)
-                    if extraID and eventData.spellID then
-                        local okEx, resEx = pcall(function() return tostring(extraID) == tostring(eventData.spellID) end)
-                        if okEx and resEx then
-                            matched = true
-                            break
-                        end
+                    if extraID and eventData.spellID and IDMatches(extraID, eventData.spellID) then
+                        matched = true
+                        break
                     end
                     if extraID and eventData.spellName then
                         local extraName = SpellNameOf(extraID)
                         if extraName then
-                            local okEq, resEq = pcall(function() return extraName == eventData.spellName end)
-                            if okEq and resEq then
+                            local okName, same = pcall(SameName, extraName, eventData.spellName)
+                            if okName and same then
                                 matched = true
                                 break
-                            else
-                                local okLower, resLower = pcall(function() 
-                                    return string.lower(extraName) == string.lower(tostring(eventData.spellName)) 
-                                end)
-                                if okLower and resLower then
-                                    matched = true
-                                    break
-                                end
                             end
                         end
                     end
                     if extraID and C_UnitAuras and auraFallbackAllowed
-                        and not (eventData and eventData.isLost) then
-                        if C_UnitAuras.GetAuraDataBySpellID then
-                            local okEx, auraEx = pcall(C_UnitAuras.GetAuraDataBySpellID, "player", extraID)
-                            if okEx and auraEx then matched = true; break end
-                        end
-                        if C_UnitAuras.GetPlayerAuraBySpellID then
-                            local okEx, auraEx = pcall(C_UnitAuras.GetPlayerAuraBySpellID, extraID)
-                            if okEx and auraEx then matched = true; break end
-                        end
+                        and not (eventData and eventData.isLost) and PlayerHasAura(extraID) then
+                        matched = true
+                        break
                     end
                 end
             end
-            
+
             if not matched then
                 return false
             end
         end
-        
+
         -- Aura name condition. eventData.spellName may be a "secret" string that
         -- throws on :lower()/:find(); pcall-guard and treat any failure as no-match.
         if conditions.auraName and conditions.auraName ~= "" then
-            local needle = conditions.auraName:lower()
-            local ok, found = pcall(function()
-                return eventData.spellName and eventData.spellName:lower():find(needle, 1, true) ~= nil
-            end)
-            if not ok or not found then
+            local found = false
+            if eventData.spellName then
+                local ok, has = pcall(NameHas, eventData.spellName, Needle(conditions.auraName))
+                found = ok and has
+            end
+            if not found then
                 return false
             end
         end
-        
+
         -- Aura type condition
         if conditions.auraType and eventData.auraType ~= conditions.auraType then
             return false
         end
     end
-    
+
     local handler = self:GetEventTypeHandler(eventType)
     if handler and handler.CheckCondition then
         if not handler.CheckCondition(trigger, eventData) then
@@ -1184,10 +1207,15 @@ function Triggers:ShouldTrigger(trigger, eventType, eventData)
             return false
         end
     end
-    
+
     -- Custom Lua condition
     if conditions.customLua and conditions.customLua ~= "" then
-        local func, err = loadstring("return " .. conditions.customLua)
+        -- Compiled once per text, not on every event.
+        local func = compiledConditions[conditions.customLua]
+        if func == nil then
+            func = loadstring("return " .. conditions.customLua) or false
+            compiledConditions[conditions.customLua] = func
+        end
         if func then
             local success, result = pcall(func)
             if not success or not result then
@@ -1198,7 +1226,7 @@ function Triggers:ShouldTrigger(trigger, eventType, eventData)
             return false
         end
     end
-    
+
     return true
 end
 

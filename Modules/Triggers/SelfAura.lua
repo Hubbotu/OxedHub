@@ -120,6 +120,15 @@ local function HasConfiguredAura(trigger)
     if not C_UnitAuras then
         return false, nil
     end
+    -- ⚠ The aura scan's list first. The game answers "yes" with a new table
+    -- each time, and a buff that stays up was costing 0.7 KB on every check,
+    -- four times a second in combat: 11 MB in half an hour of dungeon. The
+    -- game is still asked when the list does not have the spell.
+    local Core = OxedHub.Core
+    local active = Core and Core.activeSpellIDs
+    for _, sid in ipairs(GetConfiguredSpellIDs(trigger)) do
+        if active and active[sid] then return true, sid end
+    end
     for _, sid in ipairs(GetConfiguredSpellIDs(trigger)) do
         if C_UnitAuras.GetAuraDataBySpellID then
             local ok, aura = pcall(C_UnitAuras.GetAuraDataBySpellID, "player", sid)
@@ -269,6 +278,8 @@ end
 
 -- initial=true seeds state on login without firing (so a buff already up when you
 -- log in doesn't spam), matching the DiGua BloodlustDetector pattern.
+local NO_CONDITIONS = {}   -- shared, read only: not a new table per trigger per check
+
 local function EvaluateSelfAuraTriggers(initial)
     local profile = OxedHub.db and OxedHub.db.profile
     if not profile or not profile.triggers then return end
@@ -280,7 +291,7 @@ local function EvaluateSelfAuraTriggers(initial)
             local present, matchedSid = HasConfiguredAura(trigger)
             local was = selfAuraPresent[id]
 
-            local c = trigger.conditions or {}
+            local c = trigger.conditions or NO_CONDITIONS
             if initial then
                 selfAuraPresent[id] = present or nil
             elseif present and not was then
@@ -306,11 +317,13 @@ local function EvaluateSelfAuraTriggers(initial)
 end
 
 local selfAuraTicker = nil
+local function EvaluateChanges()
+    EvaluateSelfAuraTriggers(false)
+end
+
 local function StartSelfAuraPolling()
     if selfAuraTicker then return end
-    selfAuraTicker = C_Timer.NewTicker(0.25, function()
-        EvaluateSelfAuraTriggers(false)
-    end)
+    selfAuraTicker = C_Timer.NewTicker(0.25, EvaluateChanges)
 end
 
 local function StopSelfAuraPolling()
@@ -591,6 +604,12 @@ function Triggers:RefreshSelfAuraNativeEffects()
     end
 end
 
+local evaluateQueued = false
+local function EvaluateQueued()
+    evaluateQueued = false
+    EvaluateSelfAuraTriggers(false)
+end
+
 local monitor = CreateFrame("Frame")
 monitor:RegisterUnitEvent("UNIT_AURA", "player")
 monitor:RegisterEvent("PLAYER_ENTERING_WORLD")
@@ -617,9 +636,12 @@ monitor:SetScript("OnEvent", function(_, event)
     else
         -- Defer evaluation to the next frame tick to guarantee that Core.lua
         -- has finished its ScanUnitAuras and updated Core.activeSpellIDs.
-        C_Timer.After(0, function()
-            EvaluateSelfAuraTriggers(false)
-        end)
+        -- Once per frame, however many aura events the frame brought, and
+        -- with a function made once rather than one per event.
+        if not evaluateQueued then
+            evaluateQueued = true
+            C_Timer.After(0, EvaluateQueued)
+        end
     end
 end)
 

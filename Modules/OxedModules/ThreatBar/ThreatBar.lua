@@ -322,10 +322,22 @@ local RINGS = { 0.85, 0.4, 0.18 }
 
 local function EnsureGlow(bar, plate)
     local host = AnchorFor(plate)
-    if bar.glow and bar.glow:GetParent() == plate and bar.glowHost == host then return bar.glow end
-    if bar.glow then bar.glow:Hide() end
+    local glow = bar.glow
+    if glow then
+        if glow:GetParent() == plate and bar.glowHost == host then return glow end
+        -- ⚠ Moved, never made again. A new glow for every plate a bar went
+        -- to was a frame and twelve textures that could never be freed.
+        glow:Hide()
+        glow:SetParent(plate)
+        glow:ClearAllPoints()
+        glow:SetFrameLevel((host and host:GetFrameLevel() or 1) + 20)
+        glow:SetPoint("TOPLEFT", host, "TOPLEFT", -#RINGS, #RINGS)
+        glow:SetPoint("BOTTOMRIGHT", host, "BOTTOMRIGHT", #RINGS, -#RINGS)
+        bar.glowHost = host
+        return glow
+    end
 
-    local glow = CreateFrame("Frame", nil, plate)
+    glow = CreateFrame("Frame", nil, plate)
     glow._oxThreat = true
     bar.glowHost = host
     glow:SetFrameLevel((host and host:GetFrameLevel() or 1) + 20)
@@ -378,6 +390,16 @@ local function HideExtras(bar)
     bar.holder:Hide()
 end
 
+-- ⚠ Bars are kept and handed out again. A frame cannot be freed in WoW, so a
+-- new bar for every nameplate that appeared (and none reused when it went)
+-- was a leak that grew all session: /oxprofile showed 2.3 KB for each one.
+local spareBars = {}
+
+local function TakeBar()
+    local bar = table.remove(spareBars)
+    return bar or NewBar()
+end
+
 local function Release(unit)
     local bar = bars[unit]
     if not bar then return end
@@ -387,6 +409,7 @@ local function Release(unit)
     bar:ClearAllPoints()
     bars[unit] = nil
     dirty[unit] = nil
+    spareBars[#spareBars + 1] = bar
 end
 
 -- ── The switch stack ────────────────────────────────────────────────────────
@@ -682,7 +705,7 @@ watcher:SetScript("OnEvent", function(_, event, unit)
         -- Your own plate. Secret here means "cannot tell", and a bar on the
         -- personal plate is harmless, so it is let through rather than erroring.
         if Known(UnitIsUnit, unit, "player") == true then return end
-        bars[unit] = bars[unit] or NewBar()
+        bars[unit] = bars[unit] or TakeBar()
         dirty[unit] = true
     elseif event == "NAME_PLATE_UNIT_REMOVED" then
         Release(unit)
@@ -709,7 +732,7 @@ local function Start()
             for _, plate in ipairs(plates) do
                 local unit = plate.namePlateUnitToken
                 if unit and Known(UnitIsUnit, unit, "player") ~= true then
-                    bars[unit] = bars[unit] or NewBar()
+                    bars[unit] = bars[unit] or TakeBar()
                     dirty[unit] = true
                 end
             end

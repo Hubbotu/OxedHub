@@ -349,8 +349,8 @@ function UI:ApplyGlobalTextSize()
 
     local function TryApplyToFrame(frame)
         if frame then
-            if frame.SetScale then
-                frame:SetScale(1.0)
+            if frame.SetScale and not InCombatLockdown() then
+                pcall(frame.SetScale, frame, 1.0)
             end
             ApplyTextSizeIfNeeded(frame, offset)
         end
@@ -1301,12 +1301,12 @@ function UI:CreateDashboardTab()
     end)
 
     -- ───────────────────────────────────────────────────────────────
-    -- CARD 1: RELEASE NOTES (RELEASE 2.3.89)
+    -- CARD 1: RELEASE NOTES (RELEASE 2.3.90)
     -- ───────────────────────────────────────────────────────────────
     local relTitle = card1:CreateFontString(nil, "OVERLAY", "QuestFont_Shadow_Huge")
     relTitle:SetPoint("TOP", card1, "TOP", 0, -12)
     relTitle:SetTextColor(1, 0.82, 0, 1)
-    relTitle:SetText(L["RELEASE_TITLE"] or "Release 2.3.89")
+    relTitle:SetText(L["RELEASE_TITLE"] or "Release 2.3.90")
     local rName, rHeight, rFlags = relTitle:GetFont()
     if rName then relTitle:SetFont(rName, rHeight * 1.1, rFlags) end
 
@@ -1372,10 +1372,10 @@ function UI:CreateDashboardTab()
     -- describing features that shipped many versions ago -- so an update
     -- looked like nothing had changed. Keep it to what is actually new.
     local relLines = {
-        "•  New module: Flight Timer: how long is left on the flight, and a sound before you land.",
-        "•  New module: Instances: the hourly limit, the next free one, and a log of your runs.",
-        "•  New module: PvP Progress: honour, conquest, the Vault and your rating in every bracket.",
-        "•  Cursor: pick the trail colour on any theme, and no more straight sticks beside it.",
+        "•  Lighter in a fight: far less memory garbage, so fewer pauses to clear it.",
+        "•  Threat Bar no longer piles up a new bar for every nameplate it sees.",
+        "•  /oxprofile shows the seconds around every lag and counts a stutter once.",
+        "•  New modules: Flight Timer, Instances and PvP Progress.",
         "•  Threat Bar and Kick Bar work with Platynator; right-click the minimap for module windows.",
         "•  Grab either pack from CurseForge:",
     }

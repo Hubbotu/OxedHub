@@ -56,6 +56,7 @@ local session = { startedAt = nil, stoppedAt = nil, frames = 0, hitches = 0, cau
 local live = {
     msPerSecond = 0, peakFrameMs = 0, worstFrame = 0,
     accum = 0, peakAccum = 0, worstFrameAccum = 0, startedAt = 0,
+    framesAccum = 0, hitchAccum = 0,
 }
 
 -- ── Recording ───────────────────────────────────────────────────────────────
@@ -288,9 +289,22 @@ function Profiler:TimerProxy()
     local real = C_Timer
     proxy = setmetatable({}, { __index = real })
 
+    -- ⚠ One wrapper per function, kept. Naming a timer reads the call stack
+    -- and builds a label and a wrapper, and doing that on every C_Timer.After
+    -- was the profiler's own garbage, billed to whoever set the timer: a
+    -- recording showed "spell became usable" at 0.27 KB a call, all of it
+    -- this. A function that is always the same (the usual case now) is named
+    -- once; a new function each time is still named each time.
+    local wrappedTimers = setmetatable({}, { __mode = "k" })
+
     local function Named(fn, kind)
         if not active or type(fn) ~= "function" then return fn end
-        return Profiler:Wrap(Describe(CallerLabel(4), kind), fn)
+        local wrapped = wrappedTimers[fn]
+        if not wrapped then
+            wrapped = Profiler:Wrap(Describe(CallerLabel(4), kind), fn)
+            wrappedTimers[fn] = wrapped
+        end
+        return wrapped
     end
 
     proxy.After = function(seconds, fn)
@@ -580,6 +594,123 @@ local function CopyEntries(target, bucket, limit)
     end
 end
 
+-- ── The seconds around a hitch ──────────────────────────────────────────────
+-- A long frame alone does not show "it got slower and slower, then froze".
+-- One row per second is kept in a ring of slots made once and overwritten in
+-- place, so it makes no garbage while it runs. When a stutter starts, the
+-- seconds before it are copied onto its first hitch, and the seconds after are
+-- added as they come, so the report shows the run-up and the recovery.
+--
+-- Per second, not per frame: a row a frame at 144 fps is 4000 rows for 30 s,
+-- and the question it answers ("was it building up?") is a question of seconds.
+
+local RING_SECS    = 30
+local BEFORE_SECS  = 8     -- copied onto a stutter's first hitch
+local AFTER_SECS   = 5     -- added after it
+local ring, ringPos, ringCount = {}, 0, 0
+local waitingAfter = {}    -- hitches still collecting their "after" rows
+
+local function PushSecond(now, frames, span, worst, oxedMs, memKB, hitches)
+    ringPos = ringPos % RING_SECS + 1
+    local slot = ring[ringPos]
+    if not slot then
+        slot = {}
+        ring[ringPos] = slot
+    end
+    slot.at, slot.fps, slot.worst = now, span > 0 and frames / span or 0, worst
+    slot.oxed, slot.mem, slot.hitches = span > 0 and oxedMs / span or 0, memKB, hitches
+    slot.combat = InCombatLockdown() and true or nil
+    if ringCount < RING_SECS then ringCount = ringCount + 1 end
+
+    for i = #waitingAfter, 1, -1 do
+        local spike = waitingAfter[i]
+        local after = spike.after
+        after[#after + 1] = {
+            rel = now - spike.clock, fps = slot.fps, worst = worst,
+            oxed = slot.oxed, mem = memKB, hitches = hitches, combat = slot.combat,
+        }
+        if #after >= AFTER_SECS then table.remove(waitingAfter, i) end
+    end
+end
+
+-- The last few seconds, oldest first, as copies timed against clock.
+local function SecondsBefore(clock, count)
+    local rows = {}
+    local n = math.min(count, ringCount)
+    for back = n - 1, 0, -1 do
+        local slot = ring[(ringPos - back - 1) % RING_SECS + 1]
+        if slot and slot.at then
+            rows[#rows + 1] = {
+                rel = slot.at - clock, fps = slot.fps, worst = slot.worst,
+                oxed = slot.oxed, mem = slot.mem, hitches = slot.hitches, combat = slot.combat,
+            }
+        end
+    end
+    return rows
+end
+
+-- ── Stutters ────────────────────────────────────────────────────────────────
+-- A stutter is rarely one bad frame. Hitches less than CLUSTER_GAP apart are
+-- one stutter, reported once with its length, its worst frame and the cause
+-- most of its hitches share, instead of as a wall of near-identical spikes.
+-- A stutter holds references to its hitches, so a frame that grows after it
+-- was first noted (see RecordSpike) is counted at its final length.
+
+local CLUSTER_GAP  = 2      -- seconds between hitches that still count as one
+local CLUSTER_KEEP = 30
+local CLUSTER_REFS = 60
+local clusters = {}
+
+local function NoteHitch(spike)
+    if spike.noted then return end
+    spike.noted = true
+    local now = GetTime()
+    local last = clusters[#clusters]
+    if last and now - last.lastAt <= CLUSTER_GAP then
+        last.count = last.count + 1
+        last.lastAt = now
+        if #last.spikes < CLUSTER_REFS then last.spikes[#last.spikes + 1] = spike end
+        spike.clusterAt = last.at
+        return
+    end
+
+    local cluster = { at = time(), firstAt = now, lastAt = now, count = 1, spikes = { spike } }
+    clusters[#clusters + 1] = cluster
+    if #clusters > CLUSTER_KEEP then table.remove(clusters, 1) end
+    spike.clusterAt, spike.clusterFirst = cluster.at, true
+
+    -- Only the first hitch of a stutter carries the seconds around it: every
+    -- hitch in a run of twenty would repeat the same rows twenty times.
+    spike.clock = now
+    spike.before = SecondsBefore(now, BEFORE_SECS)
+    spike.after = {}
+    waitingAfter[#waitingAfter + 1] = spike
+    if #waitingAfter > 4 then table.remove(waitingAfter, 1) end
+end
+
+-- Stutters as plain rows, the same shape live and saved.
+local function ClusterRows()
+    local rows = {}
+    for _, c in ipairs(clusters) do
+        local peak, total, causes = 0, 0, {}
+        for _, spike in ipairs(c.spikes) do
+            local ms = spike.frameMs or 0
+            if ms > peak then peak = ms end
+            total = total + ms
+            if spike.cause then causes[spike.cause] = (causes[spike.cause] or 0) + 1 end
+        end
+        local main, mainN = nil, 0
+        for cause, n in pairs(causes) do
+            if n > mainN then main, mainN = cause, n end
+        end
+        rows[#rows + 1] = {
+            at = c.at, secs = c.lastAt - c.firstAt, count = c.count,
+            peak = peak, total = total, cause = main, causeN = mainN,
+        }
+    end
+    return rows
+end
+
 local function RecordSpike(frameMs, reason, alloc, collected)
     -- One piece of work, one record. Heavy OxedHub work is recorded the tick it
     -- happens, and the long frame it causes is measured a tick later -- which
@@ -612,6 +743,7 @@ local function RecordSpike(frameMs, reason, alloc, collected)
                 earlier.cause, earlier.counted = cause, true
             end
         end
+        if earlier.reason == "hitch" then NoteHitch(earlier) end
         cur.spike = earlier
         return
     end
@@ -650,6 +782,7 @@ local function RecordSpike(frameMs, reason, alloc, collected)
 
     spikes[#spikes + 1] = spike
     cur.spike = spike
+    if reason == "hitch" then NoteHitch(spike) end
     if #spikes > SPIKE_LOG then table.remove(spikes, 1) end
 end
 
@@ -677,6 +810,8 @@ local function OnFrame(_, elapsed)
     -- The live figures the mini window shows: OxedHub's time over the last
     -- second, and the worst single frame of it.
     live.accum = live.accum + curMs
+    live.framesAccum = live.framesAccum + 1
+    if hitch then live.hitchAccum = live.hitchAccum + 1 end
     if curMs > live.peakAccum then live.peakAccum = curMs end
     if frameMs > live.worstFrameAccum then live.worstFrameAccum = frameMs end
     if now - live.startedAt >= 1 then
@@ -684,7 +819,9 @@ local function OnFrame(_, elapsed)
         live.msPerSecond = live.accum / span
         live.peakFrameMs = live.peakAccum
         live.worstFrame = live.worstFrameAccum
+        PushSecond(now, live.framesAccum, span, live.worstFrameAccum, live.accum, mem, live.hitchAccum)
         live.accum, live.peakAccum, live.worstFrameAccum, live.startedAt = 0, 0, 0, now
+        live.framesAccum, live.hitchAccum = 0, 0
     end
 
     if hitch or heavy then
@@ -817,6 +954,9 @@ function Profiler:Start()
     warmUntil = now + WARMUP_SECS
     live.accum, live.peakAccum, live.worstFrameAccum, live.startedAt = 0, 0, 0, now
     live.msPerSecond, live.peakFrameMs, live.worstFrame = 0, 0, 0
+    live.framesAccum, live.hitchAccum = 0, 0
+    ringCount = 0
+    wipe(waitingAfter)
     lastMem = collectgarbage("count")
     depth = 0
     cur.n, cur.over, prev.n, prev.over = 0, 0, 0, 0
@@ -843,6 +983,9 @@ function Profiler:Reset()
     session.stoppedAt = nil
     session.frames, session.hitches = 0, 0
     wipe(session.causes)
+    wipe(clusters)
+    wipe(waitingAfter)
+    ringCount = 0
     baselineMs = 0
 end
 
@@ -916,6 +1059,8 @@ function Profiler:SaveSessionToHistory()
             cause = s.cause, others = s.others, allAddonsMs = s.allAddonsMs,
             events = s.events, eventsOver = s.eventsOver, units = s.units,
             collected = s.collected, encounter = s.encounter,
+            clusterAt = s.clusterAt, clusterFirst = s.clusterFirst,
+            before = s.before, after = s.after,
         }
     end
 
@@ -929,6 +1074,7 @@ function Profiler:SaveSessionToHistory()
         top = keptTop, spikes = keptSpikes,
         causes = CopyTable and CopyTable(session.causes) or session.causes,
         addonAverages = Profiler:AddonAverages(8),
+        clusters = ClusterRows(),
     })
     while #history > HISTORY_KEEP do table.remove(history) end
 end
@@ -983,6 +1129,11 @@ function Profiler:GetSpikes()
 end
 
 function Profiler:GetLive() return live end
+
+function Profiler:GetClusters()
+    local view = self:GetView()
+    return view and (view.clusters or {}) or ClusterRows()
+end
 
 function Profiler:GetSession()
     local view = self:GetView()
@@ -1097,6 +1248,26 @@ function Profiler:BuildReport()
         add("")
     end
 
+    -- Stutters: hitches close together, one line each.
+    local stutters = self:GetClusters()
+    if #stutters > 0 then
+        local multi, single = 0, 0
+        for _, row in ipairs(stutters) do
+            if row.count > 1 then multi = multi + 1 else single = single + 1 end
+        end
+        add(("Stutters (hitches under %d s apart count as one): %d stutters, %d single hitches")
+            :format(CLUSTER_GAP, multi, single))
+        for i = #stutters, math.max(1, #stutters - 11), -1 do
+            local row = stutters[i]
+            if row.count > 1 then
+                add(("  %s  %d hitches over %.1f s, worst %.0f ms, %.0f ms lost%s")
+                    :format(date("%H:%M:%S", row.at), row.count, row.secs, row.peak, row.total,
+                        row.cause and ("  mostly: %s (%d of %d)"):format(row.cause, row.causeN, row.count) or ""))
+            end
+        end
+        add("")
+    end
+
     -- Every addon's ordinary cost per frame, averaged by the game itself.
     local averages = view and view.addonAverages or (not view and self:AddonAverages(8)) or nil
     if averages and #averages > 0 then
@@ -1185,9 +1356,27 @@ function Profiler:BuildReport()
                     (spike.eventsOver or 0) > 0 and (" and %d more"):format(spike.eventsOver) or ""))
             end
         end
+        if spike.clusterAt and not spike.clusterFirst then
+            add(("    part of the stutter at %s"):format(date("%H:%M:%S", spike.clusterAt)))
+        end
         for _, entry in ipairs(spike.entries or {}) do
             if entry.ms >= 0.1 then
                 add(("    %s%.2f ms  %s"):format(string.rep("  ", entry.depth), entry.ms, entry.label))
+            end
+        end
+        -- The seconds around it: whether it was building up, and how it came back.
+        local rows = {}
+        for _, row in ipairs(spike.before or {}) do rows[#rows + 1] = row end
+        for _, row in ipairs(spike.after or {}) do rows[#rows + 1] = row end
+        if #rows > 0 then
+            add("    seconds around it (Lua is the memory of every addon together):")
+            local firstMem = rows[1].mem or 0
+            for _, row in ipairs(rows) do
+                add(("      %+4.0f s  %4.0f fps  worst %5.0f ms  OxedHub %5.1f ms/s  Lua %7.1f MB (%+.1f)%s%s")
+                    :format(row.rel or 0, row.fps or 0, row.worst or 0, row.oxed or 0,
+                        (row.mem or 0) / 1024, ((row.mem or 0) - firstMem) / 1024,
+                        (row.hitches or 0) > 0 and ("  %d hitch%s"):format(row.hitches, row.hitches > 1 and "es" or "") or "",
+                        row.combat and "  combat" or ""))
             end
         end
     end

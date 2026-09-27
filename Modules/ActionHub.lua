@@ -1688,6 +1688,12 @@ usabilityFrame:RegisterEvent("PLAYER_MOUNT_DISPLAY_CHANGED")
 -- fight -- several for a single button press -- and each used to walk every node
 -- on every hub. The recorder counted forty thousand of those passes in an hour.
 local usabilityQueued = false
+-- Named, not a new function per queue: /oxprofile counted the little
+-- functions made here, a thousand of them in five minutes.
+local function RunUsability()
+    usabilityQueued = false
+    if OxedHub.ActionHub and OxedHub.db then OxedHub.ActionHub:UpdateUsability() end
+end
 local function QueueUsability()
     if usabilityQueued then return end
     usabilityQueued = true
@@ -1695,10 +1701,7 @@ local function QueueUsability()
     -- arrives several times a second in a fight, and greying an icon a
     -- moment later is invisible. Eleven thousand passes in half an hour
     -- became a few thousand.
-    C_Timer.After(0.1, function()
-        usabilityQueued = false
-        if OxedHub.ActionHub and OxedHub.db then OxedHub.ActionHub:UpdateUsability() end
-    end)
+    C_Timer.After(0.1, RunUsability)
 end
 
 usabilityFrame:SetScript("OnEvent", function(_, event)
@@ -1738,6 +1741,10 @@ end
 -- Register both so a node lights up regardless of which one the spell uses.
 local procGlowFrame = CreateFrame("Frame")
 local procQueued = false
+local function RunProcGlows()
+    procQueued = false
+    if OxedHub.ActionHub then OxedHub.ActionHub:UpdateProcGlows() end
+end
 procGlowFrame:RegisterEvent("SPELL_ACTIVATION_OVERLAY_GLOW_SHOW")
 procGlowFrame:RegisterEvent("SPELL_ACTIVATION_OVERLAY_GLOW_HIDE")
 procGlowFrame:RegisterEvent("SPELL_ACTIVATION_OVERLAY_SHOW")
@@ -1761,10 +1768,7 @@ procGlowFrame:SetScript("OnEvent", function(_, event, spellID)
     -- node: the recorder caught frames of 29 ms, three quarters of them this.
     if OxedHub.ActionHub and not procQueued then
         procQueued = true
-        C_Timer.After(0, function()
-            procQueued = false
-            if OxedHub.ActionHub then OxedHub.ActionHub:UpdateProcGlows() end
-        end)
+        C_Timer.After(0, RunProcGlows)
     end
 end)
 
@@ -1791,6 +1795,12 @@ cooldownEventFrame:RegisterEvent("BAG_UPDATE_COOLDOWN")
 local cooldownQueued = false
 local pendingSpells = {}      -- spellID -> true, gathered over one frame
 local pendingAll = false
+-- ⚠ BAG_UPDATE_COOLDOWN is about items. It arrived 844 times in five minutes
+-- and each asked for a pass over every node, spells included, which is where
+-- most of this file's garbage came from (every spell's cooldown is a new table
+-- from the game). Only the nodes that can hold an item answer to it now.
+local pendingItems = false
+local ITEM_NODES = { item = true, toy = true, emote = true, macro = true }
 local lastFullPass = 0
 local FULL_GAP = 0.5          -- the least time between two passes over everything
 
@@ -1824,6 +1834,18 @@ local UpdateAll = Named("ActionHub: cooldowns, every node", function()
     ActionHub:UpdateWidgetCooldowns()
 end)
 
+local UpdateItems = Named("ActionHub: cooldowns, item nodes", function()
+    for _, w in ipairs(ActionHub.widgets or {}) do
+        for _, btn in ipairs((w and w.buttons) or {}) do
+            local slot = btn and btn.slotData
+            if slot and ITEM_NODES[slot.type] and btn:IsVisible() then
+                local ok, err = pcall(UpdateNodeCooldown, btn)
+                if not ok then CDDebug("node update failed: " .. tostring(err)) end
+            end
+        end
+    end
+end)
+
 local function Flush()
     cooldownQueued = false
     if not (OxedHub.ActionHub and OxedHub.db) then return end
@@ -1831,6 +1853,12 @@ local function Flush()
     if next(pendingSpells) then
         UpdateSome(pendingSpells)
         wipe(pendingSpells)
+    end
+
+    -- A full pass coming anyway covers the items too.
+    if pendingItems then
+        pendingItems = false
+        if not pendingAll then UpdateItems() end
     end
 
     if pendingAll then
@@ -1850,7 +1878,9 @@ local function Flush()
 end
 
 cooldownEventFrame:SetScript("OnEvent", function(_, event, spellID)
-    if (event == "SPELL_UPDATE_COOLDOWN" or event == "SPELL_UPDATE_CHARGES")
+    if event == "BAG_UPDATE_COOLDOWN" then
+        pendingItems = true
+    elseif (event == "SPELL_UPDATE_COOLDOWN" or event == "SPELL_UPDATE_CHARGES")
         and type(spellID) == "number" and not IsSecretValue(spellID) then
         pendingSpells[spellID] = true
     else
@@ -1861,16 +1891,17 @@ cooldownEventFrame:SetScript("OnEvent", function(_, event, spellID)
     C_Timer.After(0, Flush)
 end)
 
+local REFRESH_DELAYS = { 0.05, 0.2, 0.5, 1.0 }
+local function RefreshCooldownsLater()
+    if OxedHub and OxedHub.ActionHub then
+        OxedHub.ActionHub:UpdateWidgetCooldowns()
+    end
+end
+
 function ActionHub:QueueCooldownRefresh()
     self:UpdateWidgetCooldowns()
-
-    local delays = { 0.05, 0.2, 0.5, 1.0 }
-    for _, delay in ipairs(delays) do
-        C_Timer.After(delay, function()
-            if OxedHub and OxedHub.ActionHub then
-                OxedHub.ActionHub:UpdateWidgetCooldowns()
-            end
-        end)
+    for _, delay in ipairs(REFRESH_DELAYS) do
+        C_Timer.After(delay, RefreshCooldownsLater)
     end
 end
 

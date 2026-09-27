@@ -54,30 +54,43 @@ local LUST_BUFFS = {
 -- Returns the id of whichever lust buff is on the player, or nil.
 -- Existence only: the aura table's contents are secret in combat, so nothing
 -- inside it is ever read.
+--
+-- ⚠ The aura scan's own list is asked first. Every aura the game hands back
+-- is a new table, and Sated stays on the player for ten minutes after a lust:
+-- asking the game first made 1.6 KB of garbage on every aura change and every
+-- quarter second of combat, 20 MB in half an hour of dungeon. The game is
+-- still asked when the list does not have it, so a read the list misses in
+-- combat is still caught.
+local function HasLustAura(spellID)
+    local Core = OxedHub.Core
+    if Core and Core.activeSpellIDs and Core.activeSpellIDs[spellID] then
+        return true
+    end
+    if C_UnitAuras.GetPlayerAuraBySpellID then
+        local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, spellID)
+        if ok and aura then return true end
+    end
+    if C_UnitAuras.GetAuraDataBySpellID then
+        local ok, aura = pcall(C_UnitAuras.GetAuraDataBySpellID, "player", spellID)
+        if ok and aura then return true end
+    end
+    return false
+end
+
 local function GetActiveLustBuff()
     if not C_UnitAuras then return nil end
-    local function checkBuffs(spellID)
-        if C_UnitAuras.GetPlayerAuraBySpellID then
-            local ok, aura = pcall(C_UnitAuras.GetPlayerAuraBySpellID, spellID)
-            if ok and aura then return true end
-        end
-        local Core = OxedHub.Core
-        if Core and Core.activeSpellIDs and Core.activeSpellIDs[spellID] then
-            return true
-        end
-        if C_UnitAuras.GetAuraDataBySpellID then
-            local ok, aura = pcall(C_UnitAuras.GetAuraDataBySpellID, "player", spellID)
-            if ok and aura then return true end
-        end
-        return false
-    end
-
     for _, spellID in ipairs(LUST_BUFFS) do
-        if checkBuffs(spellID) then
+        if HasLustAura(spellID) then
             return spellID
         end
     end
     return nil
+end
+
+-- Nothing to look for without a Bloodlust rule switched on.
+local function Wanted()
+    local Core = OxedHub.Core
+    return Core and Core.HasEnabledTrigger and Core:HasEnabledTrigger("BLOODLUST") or false
 end
 
 Triggers:RegisterEventType("BLOODLUST", {
@@ -117,6 +130,7 @@ local MIN_REFIRE = 25
 local function CheckLust()
     -- Nothing to fire into until the profile is loaded.
     if not (OxedHub.db and OxedHub.db.profile) then return end
+    if not Wanted() then return end
 
     local current = GetActiveLustBuff()
     local now = GetTime()

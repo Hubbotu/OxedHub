@@ -581,6 +581,10 @@ end
 function PreyEngine:UpdateActiveHunt()
     -- The hunt HUD is an outdoor-world feature; stay out of instanced content.
     if Prey:IsRestrictedInstance() then
+        -- Done once per visit. Inside a dungeon nothing here can change, and
+        -- redoing it on every aura change cost 1 KB each time.
+        if self._restrictedApplied then return end
+        self._restrictedApplied = true
         self.state.active = false
         self.state.shouldShowHUD = false
         self:ApplyBlizzardWidgetVisibility(true)
@@ -588,6 +592,8 @@ function PreyEngine:UpdateActiveHunt()
         self:SetPollingActive(false)
         return
     end
+
+    self._restrictedApplied = nil
 
     local now = GetTime and GetTime() or 0
     local forceKillStage = now < (self.state.killStageUntil or 0)
@@ -897,6 +903,13 @@ local function MatchesAnyPhrase(message, phrases)
     return false
 end
 
+local AURA_GAP = 0.5
+local auraQueued = false
+local function RunAuraPass()
+    auraQueued = false
+    PreyEngine:UpdateActiveHunt()
+end
+
 PreyEngine:SetScript("OnEvent", function(self, event, arg1, arg2)
     if event == "PLAYER_LOGIN" or event == "PLAYER_ENTERING_WORLD" then
         self:HookAndConfigureBlizzardWidget()
@@ -991,7 +1004,19 @@ PreyEngine:SetScript("OnEvent", function(self, event, arg1, arg2)
         return
     end
 
-    if event == "UNIT_AURA" and arg1 ~= "player" then return end
+    if event == "UNIT_AURA" then
+        if arg1 ~= "player" then return end
+        -- ⚠ Folded into one pass every AURA_GAP. The player's auras change
+        -- many times a second in a fight, and each change ran the whole hunt
+        -- lookup: 769 passes and 730 KB of garbage in five minutes. A hunt
+        -- stage shows a moment later; nothing is missed, since the pass
+        -- reads the current state rather than the event.
+        if not auraQueued then
+            auraQueued = true
+            C_Timer.After(AURA_GAP, RunAuraPass)
+        end
+        return
+    end
 
     self:UpdateActiveHunt()
 end)
