@@ -25,6 +25,12 @@ local KIND_COLORS = {
 -- changed in between.
 WhatsNew.RELEASES = {
     {
+        version = "2.3.92",
+        lines = {
+            { "FIXED", "BRes & Lust Tracker switched itself on for everybody in 2.3.91. Like every other module it now ships off, and switching it on is yours to do on the Modules page." },
+        },
+    },
+    {
         version = "2.3.91",
         important = true,
         lines = {

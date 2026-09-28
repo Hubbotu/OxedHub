@@ -20,7 +20,7 @@ local SATED_IDS = {
 local BRES_SPELL_ID = 20484
 
 local DEFAULTS = {
-    enabled = true,
+    enabled = false,           -- off until the player switches it on (OxedHub standard)
     locked = true,              -- Locked by default! No mover box on screen
     hideInactive = false,       -- false: icons always visible; true: auto-hide when inactive
     style = "compact",          -- "compact" (sleek WeakAura-style icons) or "full" (with text labels)

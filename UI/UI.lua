@@ -1301,12 +1301,12 @@ function UI:CreateDashboardTab()
     end)
 
     -- ───────────────────────────────────────────────────────────────
-    -- CARD 1: RELEASE NOTES (RELEASE 2.3.91)
+    -- CARD 1: RELEASE NOTES (RELEASE 2.3.92)
     -- ───────────────────────────────────────────────────────────────
     local relTitle = card1:CreateFontString(nil, "OVERLAY", "QuestFont_Shadow_Huge")
     relTitle:SetPoint("TOP", card1, "TOP", 0, -12)
     relTitle:SetTextColor(1, 0.82, 0, 1)
-    relTitle:SetText(L["RELEASE_TITLE"] or "Release 2.3.91")
+    relTitle:SetText(L["RELEASE_TITLE"] or "Release 2.3.92")
     local rName, rHeight, rFlags = relTitle:GetFont()
     if rName then relTitle:SetFont(rName, rHeight * 1.1, rFlags) end
 
@@ -1373,10 +1373,10 @@ function UI:CreateDashboardTab()
     -- looked like nothing had changed. Keep it to what is actually new.
     local relLines = {
         "•  New module: BRes & Lust Tracker: battle res charges and Sated, on screen.",
+        "•  Switch it on yourself on the Modules page: every module ships off.",
         "•  New module: Gold World Quests: gold quests, assignments, weekly caches, a route.",
         "•  BRes & Lust picks its sound in the addon's own picker, with a BRes & Lust category.",
         "•  Lighter in a fight: far less memory garbage, so fewer pauses to clear it.",
-        "•  /oxprofile shows the seconds around every lag and counts a stutter once.",
         "•  Grab either pack from CurseForge:",
     }
 
