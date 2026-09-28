@@ -226,8 +226,18 @@ end
 function Triggers:GetSoundOptions()
     local options = {}
     table.insert(options, { label = "None", value = nil })
+    local seen = {}
     for name, data in pairs(OxedHub.db.profile.customSounds or {}) do
+        seen[name] = true
         table.insert(options, { label = data.name or name, value = name })
+    end
+    if OxedHub.GENERATED_SOUND_CATALOG then
+        for id, data in pairs(OxedHub.GENERATED_SOUND_CATALOG) do
+            if not seen[id] then
+                seen[id] = true
+                table.insert(options, { label = data.name or id, value = id })
+            end
+        end
     end
     return options
 end
@@ -322,12 +332,13 @@ function Triggers:RefreshPickerList(picker, actionType)
             if opt.value == nil then
                 noneOpt = opt
             else
-                local sound = OxedHub.db.profile.customSounds and OxedHub.db.profile.customSounds[opt.value]
+                local sound = (OxedHub.db.profile.customSounds and OxedHub.db.profile.customSounds[opt.value])
+                    or (OxedHub.GENERATED_SOUND_CATALOG and OxedHub.GENERATED_SOUND_CATALOG[opt.value])
                 if sound then
                     if sound.isFavorite then
                         table.insert(favorites, opt)
                     end
-                    if not sound.autoImported then
+                    if not sound.autoImported and not (OxedHub.GENERATED_SOUND_CATALOG and OxedHub.GENERATED_SOUND_CATALOG[opt.value]) then
                         table.insert(customs, opt)
                     else
                         local cat = (sound.category and sound.category ~= "") and sound.category or "Other"
@@ -392,6 +403,7 @@ function Triggers:RefreshPickerList(picker, actionType)
         insertCategory("Custom Sounds", customs, false)
 
         local CATEGORY_ORDER = {
+            "BRes & Lust",
             "DH Pack",
             "Monk Pack",
             "Worrier Pack",
@@ -408,7 +420,7 @@ function Triggers:RefreshPickerList(picker, actionType)
 
         for _, cat in ipairs(CATEGORY_ORDER) do
             if others[cat] then
-                insertCategory(cat, others[cat], true)
+                insertCategory(cat, others[cat], cat ~= "BRes & Lust")
                 others[cat] = nil
             end
         end
@@ -716,20 +728,25 @@ function Triggers:CreatePickerRow(picker, actionType)
         end
 
         if Triggers.currentTriggerForPicker then
-            Triggers.currentTriggerForPicker.actions = Triggers.currentTriggerForPicker.actions or {}
-            Triggers.currentTriggerForPicker.actions[at] = self.optionValue
+            local trigger = Triggers.currentTriggerForPicker
+            trigger.actions = trigger.actions or {}
+            trigger.actions[at] = self.optionValue
+            if trigger.onSelect then
+                pcall(trigger.onSelect, self.optionValue, self.optionData)
+            end
             -- If emote, chat, or toy changed, rewrite the existing macro so it stays in sync
             if (at == "toy" or at == "emote" or at == "chatMessage" or at == "startChatMessage" or at == "stopChatMessage"
-                or at == "summonIncomingChatMessage" or at == "summonAcceptedChatMessage" or at == "summonDeclinedChatMessage") and Triggers.currentTriggerForPicker.id then
-                local t = Triggers.currentTriggerForPicker
-                local macroName = Triggers:GetTriggerMacroName(t)
+                or at == "summonIncomingChatMessage" or at == "summonAcceptedChatMessage" or at == "summonDeclinedChatMessage") and trigger.id then
+                local macroName = Triggers:GetTriggerMacroName(trigger)
                 local index = GetMacroIndexByName(macroName)
                 if index > 0 then
-                    Triggers:CreateMacroForTrigger(t)
+                    Triggers:CreateMacroForTrigger(trigger)
                 end
             end
             picker:Hide()
-            Triggers:RefreshTriggersList()
+            if not trigger.onSelect then
+                Triggers:RefreshTriggersList()
+            end
         end
     end)
 
@@ -879,19 +896,25 @@ function Triggers:CreateGenericPicker(name, titleText, actionType)
     noneButton:SetText(L["PICKER_USE_NONE"] or "Use None")
     noneButton:SetScript("OnClick", function()
         if self.currentTriggerForPicker then
+            local trigger = self.currentTriggerForPicker
             local at = picker.currentActionType
-            self.currentTriggerForPicker.actions[at] = nil
+            trigger.actions = trigger.actions or {}
+            trigger.actions[at] = nil
+            if trigger.onSelect then
+                pcall(trigger.onSelect, nil)
+            end
             -- If emote or chat cleared, rewrite the existing macro so it stays in sync
             if (at == "emote" or at == "chatMessage" or at == "startChatMessage" or at == "stopChatMessage"
-                or at == "summonIncomingChatMessage" or at == "summonAcceptedChatMessage" or at == "summonDeclinedChatMessage") and self.currentTriggerForPicker.id then
-                local t = self.currentTriggerForPicker
-                local macroName = self:GetTriggerMacroName(t)
+                or at == "summonIncomingChatMessage" or at == "summonAcceptedChatMessage" or at == "summonDeclinedChatMessage") and trigger.id then
+                local macroName = self:GetTriggerMacroName(trigger)
                 local index = GetMacroIndexByName(macroName)
                 if index > 0 then
-                    self:CreateMacroForTrigger(t)
+                    self:CreateMacroForTrigger(trigger)
                 end
             end
-            self:RefreshTriggersList()
+            if not trigger.onSelect then
+                self:RefreshTriggersList()
+            end
         end
         picker:Hide()
     end)
@@ -999,9 +1022,19 @@ function Triggers:HideAllPickers()
     if self.toyPicker then self.toyPicker:Hide() end
 end
 
-function Triggers:ShowSoundPicker(trigger, actionType)
+function Triggers:ShowSoundPicker(trigger, actionType, onSelect)
     self:HideAllPickers()
-    self.currentTriggerForPicker = trigger
+    if type(trigger) == "function" then
+        onSelect = trigger
+        trigger = { actions = {} }
+    elseif type(actionType) == "function" then
+        onSelect = actionType
+        actionType = "sound"
+    end
+    self.currentTriggerForPicker = trigger or { actions = {} }
+    if onSelect then
+        self.currentTriggerForPicker.onSelect = onSelect
+    end
     self.currentSoundActionType = actionType or "sound"
     if not self.soundPicker then
         self.soundPicker = self:CreateGenericPicker("Sound", L["TITLE_PICK_SOUND"] or "Pick Sound", self.currentSoundActionType)
@@ -1009,6 +1042,7 @@ function Triggers:ShowSoundPicker(trigger, actionType)
     self.soundPicker.currentActionType = self.currentSoundActionType
     self.soundPicker.searchInput:SetText("")
     self.soundPicker:Show()
+    self.soundPicker:Raise()
     self:RefreshPickerList(self.soundPicker, self.currentSoundActionType)
 end
 

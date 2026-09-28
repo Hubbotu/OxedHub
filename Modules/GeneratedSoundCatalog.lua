@@ -2,6 +2,12 @@ local addonName, OxedHub = ...
 
 -- Auto-generated from Media\Sound subfolders (folder name = category)
 OxedHub.GENERATED_SOUND_CATALOG = {
+    ["oxedhub_bloodlust"] = { name = "Bloodlust (Default)", category = "BRes & Lust", filePath = "Interface\\AddOns\\OxedHub\\Modules\\OxedModules\\BResLustTracker\\Sounds\\bloodlust.ogg" },
+    ["oxedhub_breslust_horn_1"] = { name = "Horn 1", category = "BRes & Lust", filePath = "Interface\\AddOns\\OxedHub\\Modules\\OxedModules\\BResLustTracker\\Sounds\\S1.ogg" },
+    ["oxedhub_breslust_horn_2"] = { name = "Horn 2", category = "BRes & Lust", filePath = "Interface\\AddOns\\OxedHub\\Modules\\OxedModules\\BResLustTracker\\Sounds\\S2.ogg" },
+    ["oxedhub_breslust_horn_3"] = { name = "Horn 3", category = "BRes & Lust", filePath = "Interface\\AddOns\\OxedHub\\Modules\\OxedModules\\BResLustTracker\\Sounds\\S3.ogg" },
+    ["oxedhub_breslust_horn_4"] = { name = "Horn 4", category = "BRes & Lust", filePath = "Interface\\AddOns\\OxedHub\\Modules\\OxedModules\\BResLustTracker\\Sounds\\S4.ogg" },
+    ["oxedhub_breslust_horn_5"] = { name = "Horn 5", category = "BRes & Lust", filePath = "Interface\\AddOns\\OxedHub\\Modules\\OxedModules\\BResLustTracker\\Sounds\\S5.ogg" },
     ["oxedhub_anime_bankai"] = { name = "bankai", category = "Anime", filePath = "Interface\\AddOns\\OxedHub\\Media\\Sound\\Anime\\OxedHub_bankai.ogg" },
     ["oxedhub_anime_bankai_loud"] = { name = "bankai_loud", category = "Anime", filePath = "Interface\\AddOns\\OxedHub\\Media\\Sound\\Anime\\OxedHub_bankai_loud.ogg" },
     ["oxedhub_anime_bleach_bankai"] = { name = "Bleach_bankai", category = "Anime", filePath = "Interface\\AddOns\\OxedHub\\Media\\Sound\\Anime\\OxedHub_Bleach_bankai.ogg" },
@@ -618,4 +624,11 @@ OxedHub.GENERATED_SOUND_CATALOG = {
     ["oxedhub_worrier_pack_taunt_2"] = { name = "Taunt_2", category = "Worrier Pack", filePath = "Interface\\AddOns\\OxedHub\\Media\\Sound\\Worrier Pack\\OxedHub_Taunt_2.ogg" },
     ["oxedhub_worrier_pack_taunt_3"] = { name = "Taunt_3", category = "Worrier Pack", filePath = "Interface\\AddOns\\OxedHub\\Media\\Sound\\Worrier Pack\\OxedHub_Taunt_3.ogg" },
     ["oxedhub_worrier_pack_taunt_4"] = { name = "Taunt_4", category = "Worrier Pack", filePath = "Interface\\AddOns\\OxedHub\\Media\\Sound\\Worrier Pack\\OxedHub_Taunt_4.ogg" },
+    ["oxedhub_bloodlust"] = { name = "Bloodlust (Default)", category = "BRes & Lust", filePath = "Interface\\AddOns\\OxedHub\\Modules\\OxedModules\\BResLustTracker\\Sounds\\bloodlust.ogg" },
+    ["oxedhub_breslust_horn_1"] = { name = "Horn 1", category = "BRes & Lust", filePath = "Interface\\AddOns\\OxedHub\\Modules\\OxedModules\\BResLustTracker\\Sounds\\S1.ogg" },
+    ["oxedhub_breslust_horn_2"] = { name = "Horn 2", category = "BRes & Lust", filePath = "Interface\\AddOns\\OxedHub\\Modules\\OxedModules\\BResLustTracker\\Sounds\\S2.ogg" },
+    ["oxedhub_breslust_horn_3"] = { name = "Horn 3", category = "BRes & Lust", filePath = "Interface\\AddOns\\OxedHub\\Modules\\OxedModules\\BResLustTracker\\Sounds\\S3.ogg" },
+    ["oxedhub_breslust_horn_4"] = { name = "Horn 4", category = "BRes & Lust", filePath = "Interface\\AddOns\\OxedHub\\Modules\\OxedModules\\BResLustTracker\\Sounds\\S4.ogg" },
+    ["oxedhub_breslust_horn_5"] = { name = "Horn 5", category = "BRes & Lust", filePath = "Interface\\AddOns\\OxedHub\\Modules\\OxedModules\\BResLustTracker\\Sounds\\S5.ogg" },
 }
+

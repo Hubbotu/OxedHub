@@ -972,6 +972,10 @@ function Sounds:Play(soundIdOrPath, soundName, priority)
         local sound = sounds[resolvedIdOrPath]
         filePath = sound.filePath
         soundName = sound.name
+    elseif OxedHub.GENERATED_SOUND_CATALOG and OxedHub.GENERATED_SOUND_CATALOG[resolvedIdOrPath] then
+        local sound = OxedHub.GENERATED_SOUND_CATALOG[resolvedIdOrPath]
+        filePath = sound.filePath
+        soundName = sound.name
     end
 
     if not filePath or filePath == "" then

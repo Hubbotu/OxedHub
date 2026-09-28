@@ -25,6 +25,17 @@ local KIND_COLORS = {
 -- changed in between.
 WhatsNew.RELEASES = {
     {
+        version = "2.3.91",
+        important = true,
+        lines = {
+            { "ADDED", "BRes & Lust Tracker module (Modules, Combat): battle resurrection charges and the Sated debuff on screen, with the time left, a sound when lust goes out, and a choice of compact or full icons, side by side or stacked." },
+            { "ADDED", "Gold World Quests module (Modules, Quests & Travel): the world quests that pay gold in Midnight, the special assignments and what unlocks them, and the weekly caches each of your characters has taken. It can lay out a TomTom route that moves on by itself. Type /gwq." },
+            { "CHANGED", "BRes & Lust Tracker picks its sound through the addon's own sound picker: the search box, the categories, your favourites, your own sounds, a play button on every line and a Use None button." },
+            { "ADDED", "A BRes & Lust category in the sound picker, with Bloodlust and five horns, sitting under Favourites and your own sounds." },
+            { "FIXED", "The play buttons preview any sound from the catalogue straight away, and picking one updates the name in the settings window as it plays." },
+        },
+    },
+    {
         version = "2.3.90",
         important = true,
         lines = {

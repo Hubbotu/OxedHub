@@ -1301,12 +1301,12 @@ function UI:CreateDashboardTab()
     end)
 
     -- ───────────────────────────────────────────────────────────────
-    -- CARD 1: RELEASE NOTES (RELEASE 2.3.90)
+    -- CARD 1: RELEASE NOTES (RELEASE 2.3.91)
     -- ───────────────────────────────────────────────────────────────
     local relTitle = card1:CreateFontString(nil, "OVERLAY", "QuestFont_Shadow_Huge")
     relTitle:SetPoint("TOP", card1, "TOP", 0, -12)
     relTitle:SetTextColor(1, 0.82, 0, 1)
-    relTitle:SetText(L["RELEASE_TITLE"] or "Release 2.3.90")
+    relTitle:SetText(L["RELEASE_TITLE"] or "Release 2.3.91")
     local rName, rHeight, rFlags = relTitle:GetFont()
     if rName then relTitle:SetFont(rName, rHeight * 1.1, rFlags) end
 
@@ -1372,11 +1372,11 @@ function UI:CreateDashboardTab()
     -- describing features that shipped many versions ago -- so an update
     -- looked like nothing had changed. Keep it to what is actually new.
     local relLines = {
+        "•  New module: BRes & Lust Tracker: battle res charges and Sated, on screen.",
+        "•  New module: Gold World Quests: gold quests, assignments, weekly caches, a route.",
+        "•  BRes & Lust picks its sound in the addon's own picker, with a BRes & Lust category.",
         "•  Lighter in a fight: far less memory garbage, so fewer pauses to clear it.",
-        "•  Threat Bar no longer piles up a new bar for every nameplate it sees.",
         "•  /oxprofile shows the seconds around every lag and counts a stutter once.",
-        "•  New modules: Flight Timer, Instances and PvP Progress.",
-        "•  Threat Bar and Kick Bar work with Platynator; right-click the minimap for module windows.",
         "•  Grab either pack from CurseForge:",
     }
 
@@ -1413,16 +1413,16 @@ function UI:CreateDashboardTab()
             local cursorBtn = CreateFrame("Button", nil, listPanel, "UIPanelButtonTemplate")
             cursorBtn:SetSize(120, 22)
             cursorBtn:SetPoint("LEFT", gamingLinkBtn, "RIGHT", 8, 0)
-            cursorBtn:SetText("Flight Timer")
+            cursorBtn:SetText("BRes & Lust")
             cursorBtn:SetNormalFontObject("GameFontNormalSmall")
             cursorBtn:SetScript("OnClick", function()
                 UI:ShowTab("Modules")
-                if UI.searchBox then UI.searchBox:SetText("flight") end
+                if UI.searchBox then UI.searchBox:SetText("bres") end
             end)
             cursorBtn:SetScript("OnEnter", function(self)
                 GameTooltip:SetOwner(self, "ANCHOR_TOP")
-                GameTooltip:AddLine("Cursor", 1, 0.82, 0)
-                GameTooltip:AddLine("Opens the Modules page on the new Cursor module.", 1, 1, 1, true)
+                GameTooltip:AddLine("BRes & Lust Tracker", 1, 0.82, 0)
+                GameTooltip:AddLine("Opens the Modules page on the new tracker.", 1, 1, 1, true)
                 GameTooltip:Show()
             end)
             cursorBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
