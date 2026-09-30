@@ -25,6 +25,26 @@ local KIND_COLORS = {
 -- changed in between.
 WhatsNew.RELEASES = {
     {
+        version = "2.3.95",
+        important = true,
+        lines = {
+            { "CHANGED", "Chat Filter upgraded to full Global Ignore Suite: integrated LFG leader red highlighting, ignore notes in group tooltips, and right-click ignore in Group Finder." },
+            { "ADDED", "Blizzard 50-slot native ignore synchronization: top 50 ignores are synced into WoW's engine list to block server-level whispers, duel requests, and matchmaking." },
+            { "ADDED", "Manager UX: Live Search bar over ignores, one-click 'Add Target' button, Prune (90d+) cleanup button, and interactive Live Filter Tester in the manager (/oxfilter)." },
+            { "ADDED", "Auto-decline guild invites and trade requests from ignored players, plus new link-joke (Thunderfury, Dirge, Anal) and political spam presets." },
+            { "ADDED", "Flight Timer puts the price and the flying time in the tooltip of every destination on the flight master's map, before you pick one." },
+            { "FIXED", "Flight Timer raised an error when picking its landing sound." },
+            { "CHANGED", "Markers: the world flares are brighter and fill their buttons, and the bars have more room around them, so they still read with the background turned off." },
+        },
+    },
+    {
+        version = "2.3.94",
+        important = true,
+        lines = {
+            { "ADDED", "Experience Bar module (Modules, Character & UI): a modern, customizable XP progression bar with completed quest XP overlays, rested bonus tracking, leveling rate (XP/hour), and session statistics. Type /oxexp." },
+        },
+    },
+    {
         version = "2.3.93",
         important = true,
         lines = {

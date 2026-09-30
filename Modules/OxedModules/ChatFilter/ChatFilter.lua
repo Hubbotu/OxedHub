@@ -1,31 +1,27 @@
 -- ============================================================================
--- Chat Filter (built-in OxedHub module)
--- Takes the noise out of chat: an ignore list with no size limit, word filters
--- you write yourself, and built-in catches for the spam every city channel has.
+-- Chat Filter & Global Ignore Suite (built-in OxedHub module)
+-- Takes the noise out of chat and protects group play:
 --
 --   Ignore   players, whole realms and NPCs. Shared by every character on the
---            account, with a note and an optional expiry on each entry.
---   Filters  your own rules: words or phrases, matched as whole words, as part
---            of a word, or as a Lua pattern, limited to the channels you choose.
+--            account, with custom notes, expiration timers and live search.
+--   Sync     automatically keeps top 50 active ignores in Blizzard's native
+--            list for server-level whisper and queue blocking.
+--   LFG      highlights ignored leaders in M+/Raid Group Finder in red, and
+--            shows ignore notes directly in the group tooltip.
+--   Declines automatically declines party invites, duels, guild invites, and
+--            trade requests from ignored players.
+--   Filters  custom rules with whole-word, substring, or Lua patterns,
+--            with interactive live testing in the manager.
 --   Presets  boosting and gold selling, guild recruitment, community invites,
---            Asian-script text, raid-icon spam, and the same message repeated.
---   Blocked  a log of what was hidden this session and why, so a filter that
---            catches too much can be seen and fixed instead of guessed at.
---
--- Also turns down duels and group invites from ignored players, and warns when
--- one of them is in your group.
---
--- The game's own ignore list stops at 50 names. This one does not touch it: a
--- message from anyone on this list is hidden before a chat window draws it.
+--            Asian-script text, raid-icon spam, repeats, link jokes, politics.
+--   Blocked  live session history of filtered messages with 1-click ignore.
 -- ============================================================================
 
 local addonName, OxedHub = ...
 
--- ⚠ Only true/false/number/string here. ModuleAPI copies defaults key by key,
--- and a table default would be stored by reference -- every edit the player
--- made would be written into DEFAULTS itself. Lists are created in EnsureData.
+-- ⚠ Only true/false/number/string here. ModuleAPI copies defaults key by key.
 local DEFAULTS = {
-    enabled         = false,  -- off until the player switches it on (see ModuleAPI:Register)
+    enabled         = false,  -- off until player switches it on
 
     presetBoost     = true,   -- boost carries, gold selling, "pay in raid"
     presetGuild     = false,  -- guild recruitment
@@ -33,37 +29,40 @@ local DEFAULTS = {
     presetAsian     = false,  -- Chinese, Japanese and Korean text
     presetIcons     = true,   -- lines built out of raid target icons
     presetRepeat    = true,   -- the same sender saying the same thing again
+    presetJokes     = true,   -- Thunderfury, Dirge, Anal link spam
+    presetPolitics  = false,  -- political flamewars in public channels
 
     keepGuild       = true,   -- never filter guild or officer chat
     keepGroup       = true,   -- never filter party, raid or instance chat
     keepFriends     = true,   -- never filter friends
     keepWhispers    = false,  -- never word-filter whispers (ignores still apply)
 
-    declineDuels    = true,
-    declineInvites  = true,
-    warnGroup       = true,
+    declineDuels    = true,   -- decline duel requests
+    declineInvites  = true,   -- decline party/group invites
+    declineGuild    = true,   -- decline guild invites
+    declineTrade    = true,   -- decline trade requests
+    warnGroup       = true,   -- warn when an ignored player is in your group
+    lfgHighlight    = true,   -- color leaders red in LFG and show notes in tooltip
+    syncBlizzard    = true,   -- sync top 50 ignores to Blizzard native ignore list
 }
 
 local settings          -- OxedHubDB.modules.chatfilter, bound at login
 local manager           -- the manager window, built on first open
 local optionsWindow
 local installed = false
+local inBlizzardSync = false
 
 local PREFIX = "|cff00ff00OxedHub:|r "
 
 local REPEAT_WINDOW = 90     -- seconds the same line from the same sender is a repeat
-local LOG_LIMIT = 200        -- blocked lines kept for this session
+local LOG_LIMIT = 250        -- blocked lines kept for this session
 local EXPIRY_STEPS = { 0, 1, 7, 30, 90 }   -- days; 0 means never
 
--- Forward declarations: these are referenced by code above their definitions.
-local RefreshManager, OpenManager
+-- Forward declarations
+local RefreshManager, OpenManager, SetIgnored, SyncToBlizzard
 
 -- ── Names ───────────────────────────────────────────────────────────────────
 
--- ⚠ A secret string still answers "string" to type(); it is the comparison
--- that throws. Names handed over by the game -- a right-click menu, a unit,
--- a chat line -- are checked here before anything is done with them. The
--- helper lives above the names because they all need it.
 local function SecretValue(value)
     return issecretvalue and issecretvalue(value) or false
 end
@@ -73,8 +72,6 @@ local function PlayerRealm()
         or (GetRealmName and GetRealmName():gsub("[%s%-]", "")) or ""
 end
 
--- "name", "Name-Realm" or "name-Some Realm" all become "Name-Realm", so one
--- person is one key whichever way the game or the player spelled them.
 local function FullName(name, realm)
     if SecretValue(name) or SecretValue(realm) then return nil end
     if type(name) ~= "string" or name == "" then return nil end
@@ -100,13 +97,15 @@ local function EnsureData()
     settings.filters = type(settings.filters) == "table" and settings.filters or {}
 end
 
--- Entries whose expiry has passed are removed at login, not left to linger.
 local function PruneExpired()
     local now, removed = time(), 0
     for key, entry in pairs(settings.players) do
         if type(entry) == "table" and entry.expires and entry.expires > 0 and entry.expires <= now then
             settings.players[key] = nil
             removed = removed + 1
+            if settings.syncBlizzard and C_FriendList and C_FriendList.DelIgnore then
+                pcall(C_FriendList.DelIgnore, key)
+            end
         end
     end
     if removed > 0 then
@@ -122,20 +121,77 @@ local function IsIgnoredPlayer(full)
     return false
 end
 
-local function SetIgnored(full, on, note, days)
+function SetIgnored(full, on, note, days)
     if not full then return end
     if on then
         settings.players[full] = {
-            note = note ~= "" and note or nil,
+            note = (note and note ~= "") and note or nil,
             added = time(),
             expires = (days and days > 0) and (time() + days * 86400) or 0,
         }
         print(PREFIX .. ("now ignoring %s."):format(full))
+        if settings.syncBlizzard and C_FriendList and C_FriendList.AddIgnore then
+            inBlizzardSync = true
+            pcall(C_FriendList.AddIgnore, full)
+            C_Timer.After(1, function() inBlizzardSync = false end)
+        end
     else
         settings.players[full] = nil
         print(PREFIX .. ("no longer ignoring %s."):format(full))
+        if settings.syncBlizzard and C_FriendList and C_FriendList.DelIgnore then
+            inBlizzardSync = true
+            pcall(C_FriendList.DelIgnore, full)
+            C_Timer.After(1, function() inBlizzardSync = false end)
+        end
     end
     if RefreshManager then RefreshManager() end
+end
+
+-- ── Blizzard 50-slot Native Ignore Sync ─────────────────────────────────────
+
+function SyncToBlizzard(silent)
+    if not (settings and settings.syncBlizzard and C_FriendList and C_FriendList.GetNumIgnores and C_FriendList.AddIgnore) then
+        return
+    end
+
+    inBlizzardSync = true
+
+    -- Gather all ignored players sorted by most recently added
+    local list = {}
+    for full, entry in pairs(settings.players) do
+        list[#list + 1] = {
+            name = full,
+            added = (type(entry) == "table" and entry.added) or 0,
+        }
+    end
+    table.sort(list, function(a, b) return a.added > b.added end)
+
+    local blizzIgnores = {}
+    local num = C_FriendList.GetNumIgnores() or 0
+    for i = 1, num do
+        local bName = C_FriendList.GetIgnoreName(i)
+        if bName and bName ~= "" and bName ~= _G.UNKNOWN then
+            blizzIgnores[FullName(bName) or bName] = true
+        end
+    end
+
+    local maxSlots = 50
+    local currentCount = num
+    local syncedCount = 0
+    for i = 1, math.min(#list, maxSlots) do
+        local name = list[i].name
+        if not blizzIgnores[name] and currentCount < maxSlots then
+            pcall(C_FriendList.AddIgnore, name)
+            currentCount = currentCount + 1
+            syncedCount = syncedCount + 1
+        end
+    end
+
+    if not silent and syncedCount > 0 then
+        print(PREFIX .. ("Synchronized %d player(s) to Blizzard ignore list."):format(syncedCount))
+    end
+
+    C_Timer.After(1.5, function() inBlizzardSync = false end)
 end
 
 -- ── The blocked log ─────────────────────────────────────────────────────────
@@ -150,10 +206,8 @@ local function LogBlocked(reason, sender, text, event)
     if manager and manager:IsShown() and manager.tab == "blocked" then RefreshManager() end
 end
 
--- ── Matching ────────────────────────────────────────────────────────────────
+-- ── Matching & Filters ──────────────────────────────────────────────────────
 
--- What the message says, without colour codes or link markup, in lower case.
--- The words inside a link are kept, so "[Thunderfury]" still reads as text.
 local function Plain(msg)
     local text = msg:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
     text = text:gsub("|H.-|h(.-)|h", "%1"):gsub("|T.-|t", ""):gsub("|A.-|a", "")
@@ -164,8 +218,6 @@ local function EscapePattern(text)
     return (text:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%1"))
 end
 
--- One term against the plain text. A Lua pattern the player typed wrongly is an
--- error, not a false, so it is asked inside pcall and treated as no match.
 local function TermMatches(plain, term, mode)
     if term == "" then return false end
     if mode == "pattern" then
@@ -186,7 +238,6 @@ local function SplitTerms(terms)
     return out
 end
 
--- Which kind of chat a line came from, in the terms a filter's scope uses.
 local function ScopeOf(event, channelBaseName)
     if event == "CHAT_MSG_CHANNEL" then
         local base = type(channelBaseName) == "string" and channelBaseName:lower() or ""
@@ -234,15 +285,12 @@ local function CustomFilterHit(plain, raw, lineScope)
 end
 
 -- ── Presets ─────────────────────────────────────────────────────────────────
--- Each preset scores signals rather than matching one word. A single signal is
--- ordinary conversation -- "boost" or "vip" on their own mean nothing -- and it
--- is two or more together that make an advert. That is what keeps these from
--- hiding people who are only talking about the thing.
 
 local BOOST_SIGNALS = {
     "wts", "boost", "boosting", "carry", "carries", "pilot", "piloted", "selfplay",
     "self play", "vip", "unsaved", "pay in raid", "gold only", "going now",
     "cheapest", "discount", "discord", "armor stack", "loot funnel", "fully geared",
+    "fast delivery", "funstart", "g2g", "playerauctions",
 }
 
 local function ScoreBoost(plain)
@@ -250,7 +298,6 @@ local function ScoreBoost(plain)
     for _, signal in ipairs(BOOST_SIGNALS) do
         if plain:find(signal, 1, true) then score = score + 1 end
     end
-    -- Prices: "450k", "1.3m", "=200k".
     local _, prices = plain:gsub("%d[%d%.]*%s?[km]%f[%W]", "")
     if prices >= 2 then score = score + 2 elseif prices == 1 then score = score + 1 end
     return score
@@ -269,8 +316,6 @@ local function IsCommunityInvite(raw, plain)
         or (plain:find("community", 1, true) and plain:find("join", 1, true))
 end
 
--- UTF-8 lead bytes for the CJK blocks and Hangul. Cyrillic and accented Latin
--- sit elsewhere and are deliberately left alone.
 local function HasAsianScript(raw)
     return raw:find("[\227-\237][\128-\191][\128-\191]") ~= nil
 end
@@ -281,12 +326,45 @@ local function CountIcons(raw)
     return braces + textures
 end
 
-local recentLines, recentCount = {}, 0     -- sender -> { text, at }
+local function IsLinkJoke(raw, plain)
+    local hasLink = raw:find("|Hitem:", 1, true) or raw:find("|Hspell:", 1, true)
+        or raw:find("|Hachievement:", 1, true) or raw:find("|Htalent:", 1, true)
+    if not hasLink then return false end
+
+    -- Thunderfury: item 19019
+    if raw:find("item:19019", 1, true) or plain:find("thunderfury", 1, true) then
+        return true
+    end
+    -- Dirge: spell 23555
+    if raw:find("spell:23555", 1, true) or plain:find("dirge", 1, true) then
+        return true
+    end
+    -- Anal jokes with item or spell link
+    if plain:find("%f[%w]anal%f[%W]") or plain:find("analan", 1, true) then
+        return true
+    end
+    -- Murloc spam
+    if plain:find("murloc", 1, true) then
+        return true
+    end
+    return false
+end
+
+local POLITICAL_WORDS = {
+    "trump", "biden", "putin", "zelensky", "democrat", "republican", "libtard",
+    "maga", "conservatives", "liberals", "socialism", "communism", "election",
+}
+
+local function IsPolitical(plain)
+    for _, word in ipairs(POLITICAL_WORDS) do
+        if plain:find(word, 1, true) then return true end
+    end
+    return false
+end
+
+local recentLines, recentCount = {}, 0
 
 local function IsRepeat(sender, plain, now)
-    -- A busy city meets thousands of senders in a session. Anything older than
-    -- the repeat window can no longer match, so the table is cleared of it now
-    -- and then instead of growing for as long as the game stays open.
     recentCount = recentCount + 1
     if recentCount > 500 then
         recentCount = 0
@@ -309,13 +387,18 @@ local function PresetHit(raw, plain, sender, lineScope, now)
     if settings.presetCommunity and IsCommunityInvite(raw, plain) then return "Preset: community invite" end
     if settings.presetAsian and HasAsianScript(raw) then return "Preset: Asian-script text" end
     if settings.presetIcons and CountIcons(raw) >= 3 then return "Preset: raid icon spam" end
+    if settings.presetJokes and IsLinkJoke(raw, plain) then return "Preset: link joke spam" end
+    if settings.presetPolitics and (lineScope == "channel" or lineScope == "trade" or lineScope == "say")
+        and IsPolitical(plain) then
+        return "Preset: political spam"
+    end
     if settings.presetRepeat and lineScope ~= "whisper" and IsRepeat(sender, plain, now) then
         return "Preset: repeated message"
     end
     return nil
 end
 
--- ── Who is never filtered ───────────────────────────────────────────────────
+-- ── Protected Channels & Friends ────────────────────────────────────────────
 
 local GUILD_EVENTS = { CHAT_MSG_GUILD = true, CHAT_MSG_OFFICER = true, CHAT_MSG_GUILD_ACHIEVEMENT = true }
 local GROUP_EVENTS = {
@@ -348,24 +431,35 @@ local function Protected(event, full, guid)
     return false
 end
 
--- ── The filter ──────────────────────────────────────────────────────────────
+-- ── Core Chat Filter Engine ─────────────────────────────────────────────────
 
--- A chat filter is called once for every chat window showing the line, so the
--- same message can arrive three or four times. Each line is decided once, by
--- its line id, and every window gets that same answer -- which also keeps the
--- repeat preset from counting a single line as its own repeat, and the log
--- from listing it once per window.
 local decisions, decisionCount = {}, 0
 
--- ⚠ Chat text can be a secret value in restricted content, and any string
--- operation on a secret errors. Such a line is shown untouched rather than
--- read; filtering it is not possible, and breaking chat is worse than spam.
 local function IsSecret(value)
     return issecretvalue and issecretvalue(value) or false
 end
 
 local function Decide(event, msg, author, channelBaseName, guid)
     if type(msg) ~= "string" then return false end
+
+    -- System messages (suppress Blizzard ignore spam while syncing)
+    if event == "CHAT_MSG_SYSTEM" then
+        if inBlizzardSync then
+            if msg == ERR_IGNORE_FULL or msg == ERR_IGNORE_NOT_FOUND or msg == ERR_FRIEND_ERROR then
+                return true, "System sync notice", "Blizzard"
+            end
+            if ERR_IGNORE_ADDED_S and msg:find(ERR_IGNORE_ADDED_S:gsub("%%s", ".-")) then
+                return true, "System sync notice", "Blizzard"
+            end
+            if ERR_IGNORE_REMOVED_S and msg:find(ERR_IGNORE_REMOVED_S:gsub("%%s", ".-")) then
+                return true, "System sync notice", "Blizzard"
+            end
+            if ERR_IGNORE_ALREADY_S and msg:find(ERR_IGNORE_ALREADY_S:gsub("%%s", ".-")) then
+                return true, "System sync notice", "Blizzard"
+            end
+        end
+        return false
+    end
 
     if NPC_EVENTS[event] then
         if type(author) == "string" and settings.npcs[author:lower()] then
@@ -376,9 +470,7 @@ local function Decide(event, msg, author, channelBaseName, guid)
 
     local full = FullName(author)
     if not full then return false end
-    -- Your own line is never filtered. The player's own name can be secret
-    -- too, and comparing one is the error, so an unreadable name simply skips
-    -- this test rather than throwing.
+
     local me = UnitName("player")
     if not SecretValue(me) and ShortName(full) == me
         and full:match("%-(.+)$") == PlayerRealm() then
@@ -403,8 +495,6 @@ end
 local function ChatFilter(_, event, msg, author, _, _, _, _, _, _, channelBaseName, _, lineID, guid)
     if not settings or settings.enabled == false then return false end
     if IsSecret(msg) or IsSecret(author) then return false end
-    -- The extras can be secret on their own even when the text is not, and a
-    -- secret number fails the moment it is compared. Dropped, not read.
     if IsSecret(lineID) then lineID = nil end
     if IsSecret(channelBaseName) then channelBaseName = nil end
     if IsSecret(guid) then guid = nil end
@@ -414,7 +504,7 @@ local function ChatFilter(_, event, msg, author, _, _, _, _, _, _, channelBaseNa
     end
 
     local ok, block, reason, sender = pcall(Decide, event, msg, author, channelBaseName, guid)
-    if not ok then block = false end   -- a filter bug must never eat chat
+    if not ok then block = false end
 
     if lineID and lineID > 0 then
         decisions[lineID] = block and true or false
@@ -422,11 +512,14 @@ local function ChatFilter(_, event, msg, author, _, _, _, _, _, _, channelBaseNa
         if decisionCount > 1000 then decisions, decisionCount = {}, 0 end
     end
 
-    if block then LogBlocked(reason, sender or tostring(author), msg, event) end
+    if block and reason ~= "System sync notice" then
+        LogBlocked(reason, sender or tostring(author), msg, event)
+    end
     return block and true or false
 end
 
 local CHAT_EVENTS = {
+    "CHAT_MSG_SYSTEM",
     "CHAT_MSG_SAY", "CHAT_MSG_YELL", "CHAT_MSG_EMOTE", "CHAT_MSG_TEXT_EMOTE",
     "CHAT_MSG_CHANNEL", "CHAT_MSG_WHISPER", "CHAT_MSG_AFK", "CHAT_MSG_DND",
     "CHAT_MSG_GUILD", "CHAT_MSG_OFFICER", "CHAT_MSG_ACHIEVEMENT", "CHAT_MSG_GUILD_ACHIEVEMENT",
@@ -437,9 +530,6 @@ local CHAT_EVENTS = {
     "CHAT_MSG_COMMUNITIES_CHANNEL",
 }
 
--- The long-standing global is asked for first: it is known to work on 12.0.
--- ChatFrameUtil is the newer home for the same call and is kept as the
--- fallback for a build that has retired the global.
 local function AddFilter(event, fn)
     if ChatFrame_AddMessageEventFilter then
         return ChatFrame_AddMessageEventFilter(event, fn)
@@ -448,7 +538,7 @@ local function AddFilter(event, fn)
     end
 end
 
--- ── Duels, invites and group warnings ───────────────────────────────────────
+-- ── Social Protection (Duels, Invites, Trade, Group Alerts) ──────────────────
 
 local warnedInGroup = {}
 
@@ -478,44 +568,139 @@ social:SetScript("OnEvent", function(_, event, name, ...)
     if not settings or settings.enabled == false then return end
 
     if event == "DUEL_REQUESTED" and settings.declineDuels then
-        if IsIgnoredPlayer(FullName(name)) then
+        local full = FullName(name)
+        if full and IsIgnoredPlayer(full) then
             CancelDuel()
             StaticPopup_Hide("DUEL_REQUESTED")
-            LogBlocked("Declined duel", FullName(name), "Duel request", event)
+            LogBlocked("Declined duel", full, "Duel request", event)
         end
     elseif event == "PARTY_INVITE_REQUEST" and settings.declineInvites then
-        if IsIgnoredPlayer(FullName(name)) then
+        local full = FullName(name)
+        if full and IsIgnoredPlayer(full) then
             DeclineGroup()
             StaticPopup_Hide("PARTY_INVITE")
-            LogBlocked("Declined invite", FullName(name), "Group invite", event)
+            LogBlocked("Declined invite", full, "Group invite", event)
+        end
+    elseif event == "GUILD_INVITE_REQUEST" and settings.declineGuild then
+        local full = FullName(name)
+        if full and IsIgnoredPlayer(full) then
+            DeclineGuild()
+            StaticPopup_Hide("GUILD_INVITE")
+            LogBlocked("Declined guild invite", full, "Guild invite", event)
+        end
+    elseif event == "TRADE_REQUEST" and settings.declineTrade then
+        local full = FullName(name)
+        if full and IsIgnoredPlayer(full) then
+            CancelTrade()
+            StaticPopup_Hide("TRADE")
+            LogBlocked("Declined trade", full, "Trade request", event)
         end
     elseif event == "GROUP_ROSTER_UPDATE" then
         CheckGroup()
     end
 end)
 
--- ── Right-click menus ───────────────────────────────────────────────────────
+local SOCIAL_EVENTS = {
+    "DUEL_REQUESTED", "PARTY_INVITE_REQUEST", "GUILD_INVITE_REQUEST",
+    "TRADE_REQUEST", "GROUP_ROSTER_UPDATE",
+}
 
--- The name on a unit menu. A chat name carries name and server in the context;
--- a unit frame carries a unit to ask instead.
-local function MenuTarget(contextData)
-    if type(contextData) ~= "table" then return nil end
-    if SecretValue(contextData) or (canaccesstable and not canaccesstable(contextData)) then
-        return nil
+local function SetSocialEvents(on)
+    for _, event in ipairs(SOCIAL_EVENTS) do
+        if on then social:RegisterEvent(event) else social:UnregisterEvent(event) end
     end
+end
 
-    if contextData.name then
-        return FullName(contextData.name, contextData.server)
-    end
+-- ── LFG Dungeon & Raid Finder Hooks (from GlobalIgnoreList) ──────────────────
 
-    local unit = contextData.unit
-    if unit and not SecretValue(unit) then
-        local ok, isPlayer = pcall(UnitIsPlayer, unit)
-        if ok and not SecretValue(isPlayer) and isPlayer then
-            local okName, name, realm = pcall(UnitName, unit)
-            if okName then return FullName(name, realm) end
+local function HighlightLFGIgnore(self)
+    if not (settings and settings.enabled and settings.lfgHighlight) then return end
+    if not self.resultID or not C_LFGList or not C_LFGList.HasSearchResultInfo then return end
+    local ok, hasInfo = pcall(C_LFGList.HasSearchResultInfo, self.resultID)
+    if not (ok and hasInfo) then return end
+    local okInfo, info = pcall(C_LFGList.GetSearchResultInfo, self.resultID)
+    if not (okInfo and info and info.leaderName) then return end
+    local full = FullName(info.leaderName)
+    if full and IsIgnoredPlayer(full) then
+        if self.Name then
+            self.Name:SetTextColor(1, 0.25, 0.25)
         end
     end
+end
+
+local function TooltipLFGIgnore(self)
+    if not (settings and settings.enabled and settings.lfgHighlight) then return end
+    if not self.resultID or not C_LFGList or not C_LFGList.HasSearchResultInfo then return end
+    local ok, hasInfo = pcall(C_LFGList.HasSearchResultInfo, self.resultID)
+    if not (ok and hasInfo) then return end
+    local okInfo, info = pcall(C_LFGList.GetSearchResultInfo, self.resultID)
+    if not (okInfo and info and info.leaderName) then return end
+    local full = FullName(info.leaderName)
+    if full and IsIgnoredPlayer(full) then
+        local entry = settings.players[full]
+        local note = type(entry) == "table" and entry.note
+        GameTooltip:AddLine(" ")
+        GameTooltip:AddLine("|cffff3333[OxedHub] Ignored Group Leader!|r")
+        if note and note ~= "" then
+            GameTooltip:AddLine("|cffffd100Note:|r " .. note, 1, 1, 1, true)
+        end
+        GameTooltip:Show()
+    end
+end
+
+local lfgHooked = false
+local function HookLFG()
+    if lfgHooked then return end
+    lfgHooked = true
+    if hooksecurefunc then
+        pcall(hooksecurefunc, "LFGListSearchEntry_Update", HighlightLFGIgnore)
+        pcall(hooksecurefunc, "LFGListSearchEntry_OnEnter", TooltipLFGIgnore)
+    end
+end
+
+-- ── Right-Click Menus (Retail 11.x Menu API) ────────────────────────────────
+
+local function MenuTarget(contextData, owner)
+    if type(contextData) == "table" then
+        if not SecretValue(contextData) and (not canaccesstable or canaccesstable(contextData)) then
+            if contextData.name then
+                return FullName(contextData.name, contextData.server)
+            end
+
+            -- LFG search result entry
+            if contextData.resultID and C_LFGList and C_LFGList.GetSearchResultInfo then
+                local ok, info = pcall(C_LFGList.GetSearchResultInfo, contextData.resultID)
+                if ok and info and info.leaderName then
+                    return FullName(info.leaderName)
+                end
+            end
+
+            -- LFG applicant entry
+            if contextData.applicantID and C_LFGList and C_LFGList.GetApplicantInfo then
+                local ok, info = pcall(C_LFGList.GetApplicantInfo, contextData.applicantID)
+                if ok and info and info.name then
+                    return FullName(info.name)
+                end
+            end
+
+            local unit = contextData.unit
+            if unit and not SecretValue(unit) then
+                local ok, isPlayer = pcall(UnitIsPlayer, unit)
+                if ok and not SecretValue(isPlayer) and isPlayer then
+                    local okName, name, realm = pcall(UnitName, unit)
+                    if okName then return FullName(name, realm) end
+                end
+            end
+        end
+    end
+
+    if owner and owner.resultID and C_LFGList and C_LFGList.GetSearchResultInfo then
+        local ok, info = pcall(C_LFGList.GetSearchResultInfo, owner.resultID)
+        if ok and info and info.leaderName then
+            return FullName(info.leaderName)
+        end
+    end
+
     return nil
 end
 
@@ -523,14 +708,15 @@ local MENU_TAGS = {
     "MENU_UNIT_FRIEND", "MENU_UNIT_PLAYER", "MENU_UNIT_ENEMY_PLAYER",
     "MENU_UNIT_PARTY", "MENU_UNIT_RAID_PLAYER", "MENU_UNIT_TARGET",
     "MENU_UNIT_COMMUNITIES_GUILD_MEMBER", "MENU_UNIT_COMMUNITIES_MEMBER",
+    "MENU_LFG_FRAME_SEARCH_ENTRY", "MENU_LFG_FRAME_APPLICANT",
 }
 
 local function InstallMenus()
     if not (Menu and Menu.ModifyMenu) then return end
     for _, tag in ipairs(MENU_TAGS) do
-        pcall(Menu.ModifyMenu, tag, function(_, root, contextData)
+        pcall(Menu.ModifyMenu, tag, function(owner, root, contextData)
             if not settings or settings.enabled == false then return end
-            local full = MenuTarget(contextData)
+            local full = MenuTarget(contextData, owner)
             if not full then return end
             local me = UnitName("player")
             if SecretValue(me) or ShortName(full) == me then return end
@@ -543,9 +729,9 @@ local function InstallMenus()
     end
 end
 
--- ── The manager window ──────────────────────────────────────────────────────
+-- ── Manager Window UI ───────────────────────────────────────────────────────
 
-local ROW_HEIGHT = 20
+local ROW_HEIGHT = 22
 
 local function MakeButton(parent, text, width, onClick)
     local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
@@ -563,7 +749,7 @@ local function MakeInput(parent, width, hint)
     box:SetScript("OnEnterPressed", box.ClearFocus)
     if hint then
         box.hint = box:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
-        box.hint:SetPoint("LEFT", box, "LEFT", 2, 0)
+        box.hint:SetPoint("LEFT", box, "LEFT", 4, 0)
         box.hint:SetText(hint)
         box:SetScript("OnTextChanged", function(self)
             self.hint:SetShown(self:GetText() == "")
@@ -572,24 +758,30 @@ local function MakeInput(parent, width, hint)
     return box
 end
 
--- A button whose text walks through a list of choices. Used instead of dropdown
--- menus, whose templates have changed too often between builds to rely on.
 local function MakeCycle(parent, width, choices, onChange)
     local button = MakeButton(parent, "", width)
     button.choices, button.index = choices, 1
     function button:SetValue(key)
         for index, choice in ipairs(self.choices) do
-            if choice.key == key then self.index = index end
+            if choice.key == key then
+                self.index = index
+                self:SetText(choice.label)
+                return
+            end
         end
-        self:SetText(self.choices[self.index].label)
+        self.index = 1
+        self:SetText(self.choices[1] and self.choices[1].label or "")
     end
-    function button:GetValue() return self.choices[self.index].key end
+    function button:GetValue()
+        local choice = self.choices[self.index]
+        return choice and choice.key
+    end
     button:SetScript("OnClick", function(self)
-        self.index = self.index % #self.choices + 1
+        self.index = (self.index % #self.choices) + 1
         self:SetText(self.choices[self.index].label)
         if onChange then onChange(self:GetValue()) end
     end)
-    button:SetValue(choices[1].key)
+    button:SetValue(choices[1] and choices[1].key)
     return button
 end
 
@@ -602,7 +794,7 @@ local function GetRow(index)
 
     local highlight = row:CreateTexture(nil, "BACKGROUND")
     highlight:SetAllPoints()
-    highlight:SetColorTexture(1, 1, 1, 0.06)
+    highlight:SetColorTexture(1, 1, 1, 0.07)
     highlight:Hide()
     row.highlight = highlight
 
@@ -643,14 +835,10 @@ local function GetRow(index)
     return row
 end
 
--- Draws a list of items: { left, right, checked, onCheck, onDelete, onClick,
--- tooltip, tooltipTitle }. A missing handler hides that control on the row.
 local function DrawRows(items)
     local y = 0
     for index, item in ipairs(items) do
         local row = GetRow(index)
-        -- TOPLEFT and TOPRIGHT, never LEFT/RIGHT plus TOP: LEFT and RIGHT pin
-        -- the vertical centre, and the two disagree about where the row sits.
         row:ClearAllPoints()
         row:SetPoint("TOPLEFT", manager.content, "TOPLEFT", 0, -y)
         row:SetPoint("TOPRIGHT", manager.content, "TOPRIGHT", 0, -y)
@@ -696,43 +884,63 @@ end
 
 local function DrawIgnoreTab()
     local items = {}
+    local filterText = manager.searchBox and manager.searchBox:GetText():lower():gsub("^%s+", ""):gsub("%s+$", "") or ""
+
     local names = {}
-    for full in pairs(settings.players) do names[#names + 1] = full end
+    for full in pairs(settings.players) do
+        local entry = settings.players[full]
+        local note = (type(entry) == "table" and entry.note) or ""
+        if filterText == "" or full:lower():find(filterText, 1, true) or note:lower():find(filterText, 1, true) then
+            names[#names + 1] = full
+        end
+    end
     table.sort(names)
 
     for _, full in ipairs(names) do
         local entry = settings.players[full]
         local right = ""
         if type(entry) == "table" and entry.expires and entry.expires > 0 then
-            right = ("%dd left"):format(math.max(0, math.ceil((entry.expires - time()) / 86400)))
+            right = ("|cff55ff55%dd left|r"):format(math.max(0, math.ceil((entry.expires - time()) / 86400)))
+        else
+            right = "|cff888888Permanent|r"
         end
         local note = type(entry) == "table" and entry.note
         items[#items + 1] = {
-            left = full .. (note and ("  |cff9d9d9d" .. note .. "|r") or ""),
+            left = "|cffffffff" .. full .. "|r" .. (note and ("  |cffffd100(" .. note .. ")|r") or ""),
             right = right,
             tooltipTitle = full,
             tooltip = (type(entry) == "table" and entry.added)
-                and ("Added " .. date("%Y-%m-%d", entry.added)) or nil,
+                and ("Added " .. date("%Y-%m-%d", entry.added) .. (note and ("\nNote: " .. note) or "")) or nil,
             onDelete = function() SetIgnored(full, false) end,
         }
     end
+
     for realm in pairs(settings.realms) do
-        items[#items + 1] = {
-            left = "|cffffd100Realm|r  " .. realm, right = "whole realm",
-            onDelete = function() settings.realms[realm] = nil; RefreshManager() end,
-        }
+        if filterText == "" or realm:lower():find(filterText, 1, true) then
+            items[#items + 1] = {
+                left = "|cff00ccff[Realm]|r  " .. realm, right = "whole realm",
+                onDelete = function() settings.realms[realm] = nil; RefreshManager() end,
+            }
+        end
     end
+
     for npc in pairs(settings.npcs) do
-        items[#items + 1] = {
-            left = "|cffffd100NPC|r  " .. npc, right = "npc",
-            onDelete = function() settings.npcs[npc] = nil; RefreshManager() end,
-        }
+        if filterText == "" or npc:lower():find(filterText, 1, true) then
+            items[#items + 1] = {
+                left = "|cffffaa00[NPC]|r  " .. npc, right = "monster/npc",
+                onDelete = function() settings.npcs[npc] = nil; RefreshManager() end,
+            }
+        end
     end
+
     if #items == 0 then
-        items[1] = { left = "|cff9d9d9dNothing ignored yet. Add a name below, or right-click a name in chat.|r" }
+        items[1] = { left = "|cff9d9d9dNo matching ignores found.|r" }
     end
     DrawRows(items)
-    manager.count:SetText(("%d player(s)"):format(#names))
+
+    local totalPlayers = 0
+    for _ in pairs(settings.players) do totalPlayers = totalPlayers + 1 end
+    manager.count:SetText(("%d player(s) ignored"):format(totalPlayers))
 end
 
 local function AddIgnoreFromInputs()
@@ -743,7 +951,7 @@ local function AddIgnoreFromInputs()
     local kind = panel.kind:GetValue()
     if kind == "realm" then
         settings.realms[text:gsub("[%s%-]", ""):lower()] = true
-        print(PREFIX .. ("now ignoring everyone from %s."):format(text))
+        print(PREFIX .. ("now ignoring everyone from realm %s."):format(text))
     elseif kind == "npc" then
         settings.npcs[text:lower()] = true
         print(PREFIX .. ("now ignoring the NPC %s."):format(text))
@@ -758,12 +966,14 @@ end
 -- ── Tab: Filters ────────────────────────────────────────────────────────────
 
 local PRESETS = {
-    { key = "presetBoost",     label = "Boosting and gold selling",  tip = "Adverts for carries, piloting, VIP runs and gold. Needs several signals together -- prices, 'pay in raid', 'unsaved' -- so a player just mentioning a boost is not hidden." },
-    { key = "presetGuild",     label = "Guild recruitment",          tip = "Messages recruiting for a guild or raiding team." },
-    { key = "presetCommunity", label = "Community invites",          tip = "Links inviting you to join a community." },
-    { key = "presetAsian",     label = "Asian-script text",          tip = "Chinese, Japanese and Korean text. Cyrillic and accented letters are not affected." },
-    { key = "presetIcons",     label = "Raid icon spam",             tip = "Lines using three or more raid target icons." },
-    { key = "presetRepeat",    label = "Repeated messages",          tip = "The same sender posting the same line again within 90 seconds. Whispers are never counted." },
+    { key = "presetBoost",     label = "Boosting and gold selling",       tip = "Adverts for carries, piloting, VIP runs and gold sales." },
+    { key = "presetGuild",     label = "Guild recruitment",               tip = "Messages recruiting for a guild or raiding team." },
+    { key = "presetCommunity", label = "Community invites",               tip = "Links inviting you to join a community or club." },
+    { key = "presetAsian",     label = "Asian-script text",               tip = "Chinese, Japanese and Korean text." },
+    { key = "presetIcons",     label = "Raid icon spam",                  tip = "Lines using three or more raid target icons." },
+    { key = "presetJokes",     label = "Link jokes (Thunderfury, Anal)",  tip = "Catches Thunderfury, Dirge, Anal and Murloc spam with links." },
+    { key = "presetPolitics",  label = "Political flamewars",             tip = "Political arguments and keywords in public chat." },
+    { key = "presetRepeat",    label = "Repeated messages",               tip = "The same sender posting the same line again within 90 seconds." },
 }
 
 local MODES = {
@@ -780,98 +990,115 @@ local LINKS = {
     { key = true,  label = "Only with a link" },
 }
 
+local function SaveFilterFromInputs()
+    local panel = manager.filterPanel
+    local terms = panel.terms:GetText():gsub("^%s+", ""):gsub("%s+$", "")
+    if terms == "" then return end
+
+    local index = manager.editing or (#settings.filters + 1)
+    settings.filters[index] = {
+        name     = panel.name:GetText():gsub("^%s+", ""):gsub("%s+$", ""),
+        terms    = terms,
+        mode     = panel.mode:GetValue(),
+        match    = panel.match:GetValue(),
+        scope    = panel.scope:GetValue(),
+        needLink = panel.link:GetValue() and true or false,
+        on       = settings.filters[index] and settings.filters[index].on or true,
+    }
+    manager.editing = nil
+    panel.name:SetText("")
+    panel.terms:SetText("")
+    panel.save:SetText("Add filter")
+    RefreshManager()
+end
+
+local function EditFilter(index)
+    local filter = settings.filters[index]
+    if not filter then return end
+    manager.editing = index
+    local panel = manager.filterPanel
+    panel.name:SetText(filter.name or "")
+    panel.terms:SetText(filter.terms or "")
+    panel.mode:SetValue(filter.mode or "contains")
+    panel.match:SetValue(filter.match or "any")
+    panel.scope:SetValue(filter.scope or "all")
+    panel.link:SetValue(filter.needLink and true or false)
+    panel.save:SetText("Save filter")
+    panel.name:SetFocus()
+end
+
 local function DrawFiltersTab()
     local items = {}
     for _, preset in ipairs(PRESETS) do
         items[#items + 1] = {
-            left = "|cffffd100Built-in|r  " .. preset.label,
-            checked = settings[preset.key],
-            onCheck = function(on) settings[preset.key] = on and true or false end,
-            tooltipTitle = preset.label, tooltip = preset.tip,
+            left = "|cffffffff" .. preset.label .. "|r",
+            right = "|cff888888preset|r",
+            checked = settings[preset.key] and true or false,
+            onCheck = function(checked) settings[preset.key] = checked end,
+            tooltipTitle = preset.label,
+            tooltip = preset.tip,
         }
     end
     for index, filter in ipairs(settings.filters) do
+        local summary = filter.name ~= "" and filter.name or filter.terms
         items[#items + 1] = {
-            left = (filter.name ~= "" and filter.name or "Unnamed") .. "  |cff9d9d9d" .. (filter.terms or "") .. "|r",
-            right = filter.scope ~= "all" and filter.scope or "",
+            left = "|cff00ff00Filter:|r " .. summary,
+            right = filter.scope or "all",
             checked = filter.on ~= false,
-            onCheck = function(on) filter.on = on and true or false end,
-            onClick = function() manager.editing = index; RefreshManager() end,
+            onCheck = function(checked) filter.on = checked end,
+            tooltipTitle = filter.name ~= "" and filter.name or "Custom filter",
+            tooltip = "Terms: " .. filter.terms .. "\nClick to edit this filter.",
+            onClick = function() EditFilter(index) end,
             onDelete = function()
                 table.remove(settings.filters, index)
-                manager.editing = nil
+                if manager.editing == index then manager.editing = nil end
                 RefreshManager()
             end,
-            tooltipTitle = "Click to edit",
-            tooltip = ("Terms: %s\nMatch: %s, %s"):format(filter.terms or "", filter.mode or "contains", filter.match or "any"),
         }
     end
     DrawRows(items)
-    manager.count:SetText(("%d filter(s)"):format(#settings.filters))
-
-    local panel = manager.filterPanel
-    local filter = manager.editing and settings.filters[manager.editing]
-    panel.name:SetText(filter and filter.name or "")
-    panel.terms:SetText(filter and filter.terms or "")
-    panel.mode:SetValue(filter and filter.mode or "contains")
-    panel.match:SetValue(filter and filter.match or "any")
-    panel.scope:SetValue(filter and filter.scope or "all")
-    panel.link:SetValue(filter and filter.needLink or false)
-    panel.save:SetText(filter and "Save" or "Add filter")
-end
-
-local function SaveFilterFromInputs()
-    local panel = manager.filterPanel
-    local terms = panel.terms:GetText()
-    if #SplitTerms(terms) == 0 then
-        print(PREFIX .. "a filter needs at least one word to look for.")
-        return
-    end
-    local filter = (manager.editing and settings.filters[manager.editing]) or {}
-    filter.name = panel.name:GetText()
-    filter.terms = terms
-    filter.mode = panel.mode:GetValue()
-    filter.match = panel.match:GetValue()
-    filter.scope = panel.scope:GetValue()
-    filter.needLink = panel.link:GetValue()
-    if filter.on == nil then filter.on = true end
-    if not manager.editing then settings.filters[#settings.filters + 1] = filter end
-    manager.editing = nil
-    RefreshManager()
+    manager.count:SetText(("%d custom filter(s)"):format(#settings.filters))
 end
 
 -- ── Tab: Blocked ────────────────────────────────────────────────────────────
 
 local function DrawBlockedTab()
     local items = {}
-    for index = #blockedLog, 1, -1 do
-        local line = blockedLog[index]
-        local sender = line.sender or "?"
-        items[#items + 1] = {
-            left = ("|cff9d9d9d%s|r  %s: %s"):format(date("%H:%M", line.time),
-                ShortName(sender) or "?", Plain(line.text or "")),
-            right = line.reason,
-            tooltipTitle = sender .. "  --  " .. (line.reason or ""),
-            tooltip = (line.text or "") .. "\n\n|cff9d9d9dClick to ignore this sender.|r",
-            onClick = function()
-                local full = FullName(sender)
-                if full and not settings.players[full] then SetIgnored(full, true) end
-            end,
-        }
+    local filterText = manager.searchBox and manager.searchBox:GetText():lower():gsub("^%s+", ""):gsub("%s+$", "") or ""
+
+    for i = #blockedLog, 1, -1 do
+        local entry = blockedLog[i]
+        local sender = entry.sender or "Unknown"
+        local text = entry.text or ""
+        local reason = entry.reason or "Filtered"
+
+        if filterText == "" or sender:lower():find(filterText, 1, true)
+            or text:lower():find(filterText, 1, true) or reason:lower():find(filterText, 1, true) then
+            items[#items + 1] = {
+                left = "|cffff5555[" .. reason .. "]|r  " .. sender .. ": |cffbbbbbb" .. text:sub(1, 60) .. "|r",
+                right = date("%H:%M:%S", entry.time),
+                tooltipTitle = sender .. " (" .. date("%H:%M:%S", entry.time) .. ")",
+                tooltip = "|cffffd100Reason:|r " .. reason .. "\n|cffffffff" .. text .. "\n\n|cff00ff00Click to add " .. sender .. " to ignore list.|r",
+                onClick = function()
+                    local full = FullName(sender)
+                    if full then SetIgnored(full, true, "Blocked: " .. reason) end
+                end,
+            }
+        end
     end
     if #items == 0 then
-        items[1] = { left = "|cff9d9d9dNothing blocked this session.|r" }
+        items[1] = { left = "|cff9d9d9dNo blocked messages in this session yet.|r" }
     end
     DrawRows(items)
-    manager.count:SetText(("%d blocked"):format(#blockedLog))
+    manager.count:SetText(("%d blocked this session"):format(#blockedLog))
 end
 
--- ── Building the window ─────────────────────────────────────────────────────
+-- ── Building the Manager Window ─────────────────────────────────────────────
 
 local TABS = {
-    { key = "ignore",  label = "Ignore" },
-    { key = "filters", label = "Filters" },
-    { key = "blocked", label = "Blocked" },
+    { key = "ignore",  label = "Ignore List" },
+    { key = "filters", label = "Spam Filters" },
+    { key = "blocked", label = "Blocked History" },
 }
 
 function RefreshManager()
@@ -882,6 +1109,7 @@ function RefreshManager()
     manager.ignorePanel:SetShown(manager.tab == "ignore")
     manager.filterPanel:SetShown(manager.tab == "filters")
     manager.blockedPanel:SetShown(manager.tab == "blocked")
+    manager.searchBox:SetShown(manager.tab ~= "filters")
 
     if manager.tab == "filters" then
         DrawFiltersTab()
@@ -896,25 +1124,75 @@ local function BuildIgnorePanel(parent)
     local panel = CreateFrame("Frame", nil, parent)
     panel:SetAllPoints()
 
-    panel.kind = MakeCycle(panel, 70, IGNORE_KINDS)
+    panel.kind = MakeCycle(panel, 75, IGNORE_KINDS)
     panel.kind:SetPoint("TOPLEFT", panel, "TOPLEFT", 0, 0)
 
-    panel.name = MakeInput(panel, 170, "Name-Realm, realm or NPC")
-    panel.name:SetPoint("LEFT", panel.kind, "RIGHT", 10, 0)
+    panel.name = MakeInput(panel, 180, "Name-Realm, realm or NPC")
+    panel.name:SetPoint("LEFT", panel.kind, "RIGHT", 8, 0)
     panel.name:SetScript("OnEnterPressed", function(self) self:ClearFocus(); AddIgnoreFromInputs() end)
 
     panel.note = MakeInput(panel, 140, "Note (optional)")
-    panel.note:SetPoint("LEFT", panel.name, "RIGHT", 10, 0)
+    panel.note:SetPoint("LEFT", panel.name, "RIGHT", 8, 0)
 
     panel.expiry = MakeCycle(panel, 120, EXPIRY_CHOICES)
     panel.expiry:SetPoint("TOPLEFT", panel.kind, "BOTTOMLEFT", 0, -6)
 
-    local add = MakeButton(panel, "Add", 80, AddIgnoreFromInputs)
+    local add = MakeButton(panel, "Add", 65, AddIgnoreFromInputs)
     add:SetPoint("LEFT", panel.expiry, "RIGHT", 8, 0)
 
-    local hint = panel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    hint:SetPoint("LEFT", add, "RIGHT", 10, 0)
-    hint:SetText("Tip: right-click a name in chat to ignore it.")
+    local targetBtn = MakeButton(panel, "Add Target", 85, function()
+        if not UnitExists("target") then
+            print(PREFIX .. "No target selected.")
+            return
+        end
+        if not UnitIsPlayer("target") then
+            local npcName = UnitName("target")
+            if npcName and npcName ~= "" then
+                settings.npcs[npcName:lower()] = true
+                print(PREFIX .. ("now ignoring NPC %s."):format(npcName))
+                RefreshManager()
+            end
+            return
+        end
+        local name, realm = UnitName("target")
+        local full = name and FullName(name, realm)
+        if full then
+            local note = panel.note:GetText()
+            local days = panel.expiry:GetValue()
+            SetIgnored(full, true, note, days)
+            panel.name:SetText("")
+            panel.note:SetText("")
+            RefreshManager()
+        end
+    end)
+    targetBtn:SetPoint("LEFT", add, "RIGHT", 6, 0)
+
+    local pruneBtn = MakeButton(panel, "Prune (90d+)", 95, function()
+        local now = time()
+        local pruned = 0
+        for key, entry in pairs(settings.players) do
+            if type(entry) == "table" and entry.added and (now - entry.added) >= (90 * 86400) then
+                settings.players[key] = nil
+                pruned = pruned + 1
+                if settings.syncBlizzard and C_FriendList and C_FriendList.DelIgnore then
+                    pcall(C_FriendList.DelIgnore, key)
+                end
+            end
+        end
+        if pruned > 0 then
+            print(PREFIX .. ("Pruned %d ignore(s) older than 90 days."):format(pruned))
+            RefreshManager()
+        else
+            print(PREFIX .. "No ignores older than 90 days found.")
+        end
+    end)
+    pruneBtn:SetPoint("LEFT", targetBtn, "RIGHT", 6, 0)
+
+    local syncBtn = MakeButton(panel, "Sync Blizzard", 95, function()
+        SyncToBlizzard(false)
+    end)
+    syncBtn:SetPoint("LEFT", pruneBtn, "RIGHT", 6, 0)
+
     return panel
 end
 
@@ -925,8 +1203,8 @@ local function BuildFilterPanel(parent)
     panel.name = MakeInput(panel, 120, "Filter name")
     panel.name:SetPoint("TOPLEFT", panel, "TOPLEFT", 6, 0)
 
-    panel.terms = MakeInput(panel, 300, "Words to catch, separated by commas")
-    panel.terms:SetPoint("LEFT", panel.name, "RIGHT", 10, 0)
+    panel.terms = MakeInput(panel, 320, "Words to catch, separated by commas")
+    panel.terms:SetPoint("LEFT", panel.name, "RIGHT", 8, 0)
 
     panel.mode = MakeCycle(panel, 110, MODES)
     panel.mode:SetPoint("TOPLEFT", panel, "TOPLEFT", 0, -28)
@@ -942,6 +1220,31 @@ local function BuildFilterPanel(parent)
 
     local new = MakeButton(panel, "New", 50, function() manager.editing = nil; RefreshManager() end)
     new:SetPoint("LEFT", panel.save, "RIGHT", 4, 0)
+
+    -- Live filter tester
+    panel.testBox = MakeInput(panel, 360, "Test a phrase here to verify filter matching...")
+    panel.testBox:SetPoint("TOPLEFT", panel.mode, "BOTTOMLEFT", 6, -8)
+
+    panel.testResult = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    panel.testResult:SetPoint("LEFT", panel.testBox, "RIGHT", 10, 0)
+
+    panel.testBox:SetScript("OnTextChanged", function(self)
+        if self.hint then self.hint:SetShown(self:GetText() == "") end
+        local text = self:GetText()
+        if text == "" then
+            panel.testResult:SetText("")
+        else
+            local plain = Plain(text)
+            local hit = CustomFilterHit(plain, text, "trade")
+                or PresetHit(text, plain, "TestSender-Realm", "trade", GetTime())
+            if hit then
+                panel.testResult:SetText("|cffff4444Blocks: " .. hit .. "|r")
+            else
+                panel.testResult:SetText("|cff44ff44Allows message|r")
+            end
+        end
+    end)
+
     return panel
 end
 
@@ -957,7 +1260,7 @@ local function BuildBlockedPanel(parent)
 
     local hint = panel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     hint:SetPoint("LEFT", clear, "RIGHT", 10, 0)
-    hint:SetText("Hover a line to read it, click to ignore the sender. Kept for this session only.")
+    hint:SetText("Click any blocked row to ignore the sender. History is session-only.")
     return panel
 end
 
@@ -965,11 +1268,8 @@ local function BuildManager()
     if manager then return manager end
 
     manager = CreateFrame("Frame", "OxedHubChatFilterWindow", UIParent, "BasicFrameTemplate")
-    manager:SetSize(640, 470)
+    manager:SetSize(680, 500)
     manager:SetPoint("CENTER")
-    -- FULLSCREEN_DIALOG, like OxedHub's own popups: the main window lives in DIALOG
-    -- with parts raised as high as level 500, so no level inside DIALOG is safely
-    -- above it. Toplevel raises it on every click.
     manager:SetFrameStrata("FULLSCREEN_DIALOG")
     manager:SetFrameLevel(210)
     manager:SetToplevel(true)
@@ -984,12 +1284,12 @@ local function BuildManager()
 
     local title = manager:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     title:SetPoint("CENTER", manager.TitleBg, "CENTER", 0, 0)
-    title:SetText("Chat Filter")
+    title:SetText("Chat Filter & Global Ignore")
 
     manager.tabButtons = {}
     local previous
     for _, tabInfo in ipairs(TABS) do
-        local button = MakeButton(manager, tabInfo.label, 90, function()
+        local button = MakeButton(manager, tabInfo.label, 110, function()
             manager.tab = tabInfo.key
             manager.editing = nil
             manager.scroll:SetVerticalScroll(0)
@@ -1005,28 +1305,33 @@ local function BuildManager()
         manager.tabButtons[#manager.tabButtons + 1] = button
     end
 
+    -- Live Search EditBox
+    manager.searchBox = MakeInput(manager, 170, "Search ignores...")
+    manager.searchBox:SetPoint("TOPRIGHT", manager, "TOPRIGHT", -20, -31)
+    manager.searchBox:SetScript("OnTextChanged", function(self)
+        if self.hint then self.hint:SetShown(self:GetText() == "") end
+        RefreshManager()
+    end)
+
     manager.count = manager:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    manager.count:SetPoint("TOPRIGHT", manager, "TOPRIGHT", -18, -36)
+    manager.count:SetPoint("TOPRIGHT", manager.searchBox, "BOTTOMRIGHT", 0, -4)
 
     local scroll = CreateFrame("ScrollFrame", "OxedHubChatFilterScroll", manager, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT", manager, "TOPLEFT", 14, -60)
-    scroll:SetPoint("BOTTOMRIGHT", manager, "BOTTOMRIGHT", -34, 84)
+    scroll:SetPoint("TOPLEFT", manager, "TOPLEFT", 14, -66)
+    scroll:SetPoint("BOTTOMRIGHT", manager, "BOTTOMRIGHT", -34, 88)
     local content = CreateFrame("Frame", nil, scroll)
-    content:SetSize(560, 1)
+    content:SetSize(600, 1)
     scroll:SetScrollChild(content)
     manager.scroll, manager.content = scroll, content
 
     local bottom = CreateFrame("Frame", nil, manager)
     bottom:SetPoint("TOPLEFT", scroll, "BOTTOMLEFT", 0, -10)
-    bottom:SetPoint("BOTTOMRIGHT", manager, "BOTTOMRIGHT", -14, 12)
+    bottom:SetPoint("BOTTOMRIGHT", manager, "BOTTOMRIGHT", -14, 10)
 
-    manager.ignorePanel = BuildIgnorePanel(bottom)
-    manager.filterPanel = BuildFilterPanel(bottom)
+    manager.ignorePanel  = BuildIgnorePanel(bottom)
+    manager.filterPanel  = BuildFilterPanel(bottom)
     manager.blockedPanel = BuildBlockedPanel(bottom)
 
-    manager:SetScript("OnShow", RefreshManager)
-    tinsert(UISpecialFrames, "OxedHubChatFilterWindow")
-    manager:Hide()
     return manager
 end
 
@@ -1045,25 +1350,24 @@ local function Install()
     if installed then return end
     installed = true
 
-    -- Named for /oxprofile. The filter is handed to the game rather than set as
-    -- a script, so the profiler cannot see it on its own; the wrapper is a
-    -- straight pass-through while nothing is being recorded.
     local filter = OxedHub.Profiler and OxedHub.Profiler:Wrap("Chat Filter: message", ChatFilter)
         or ChatFilter
     for _, event in ipairs(CHAT_EVENTS) do
         AddFilter(event, filter)
     end
     InstallMenus()
+    HookLFG()
 
     SLASH_OXEDCHATFILTER1 = "/oxfilter"
     SLASH_OXEDCHATFILTER2 = "/chatfilter"
+    SLASH_OXEDCHATFILTER3 = "/gi"
     SlashCmdList["OXEDCHATFILTER"] = function(argument)
         local tab = argument and argument:match("^%s*(%a+)")
         OpenManager(tab and tab:lower() or nil)
     end
 
-    -- /oxignore Name-Realm [note]   -- toggles that name
     SLASH_OXEDIGNORE1 = "/oxignore"
+    SLASH_OXEDIGNORE2 = "/gignore"
     SlashCmdList["OXEDIGNORE"] = function(argument)
         local name, note = tostring(argument or ""):match("^%s*(%S+)%s*(.-)%s*$")
         if not name then
@@ -1072,12 +1376,6 @@ local function Install()
         end
         local full = FullName(name)
         SetIgnored(full, not settings.players[full], note)
-    end
-end
-
-local function SetSocialEvents(on)
-    for _, event in ipairs({ "DUEL_REQUESTED", "PARTY_INVITE_REQUEST", "GROUP_ROSTER_UPDATE" }) do
-        if on then social:RegisterEvent(event) else social:UnregisterEvent(event) end
     end
 end
 
@@ -1103,7 +1401,7 @@ local function ShowOptions()
     if not API or not settings then return end
 
     if not optionsWindow then
-        optionsWindow = API:CreateOptionsWindow("Chat Filter", 430, 400)
+        optionsWindow = API:CreateOptionsWindow("Chat Filter & Global Ignore", 450, 520)
         optionsWindow:AddCheckbox(settings, "keepGuild", "Never filter guild",
             "Guild and officer chat, and guild members anywhere, are never hidden by filters.")
         optionsWindow:AddCheckbox(settings, "keepGroup", "Never filter your group",
@@ -1114,7 +1412,14 @@ local function ShowOptions()
             "Whispers skip the word filters and presets. Ignored players are still hidden.")
         optionsWindow:AddCheckbox(settings, "declineDuels", "Decline duels from ignored players")
         optionsWindow:AddCheckbox(settings, "declineInvites", "Decline group invites from ignored players")
+        optionsWindow:AddCheckbox(settings, "declineGuild", "Decline guild invites from ignored players")
+        optionsWindow:AddCheckbox(settings, "declineTrade", "Decline trade requests from ignored players")
         optionsWindow:AddCheckbox(settings, "warnGroup", "Warn when an ignored player joins your group")
+        optionsWindow:AddCheckbox(settings, "lfgHighlight", "Highlight ignored leaders in LFG / Group Finder",
+            "Colors ignored group leaders red in M+ and Raid Finder, and displays your note in the tooltip.")
+        optionsWindow:AddCheckbox(settings, "syncBlizzard", "Sync top 50 to Blizzard ignore list",
+            "Keeps the 50 most recent ignores in Blizzard's native list for engine-level whisper and queue blocking.")
+
         optionsWindow:AddNote("Ignored players are always hidden. The ignore list, word filters, built-in spam filters and the blocked log are in the manager.")
 
         local open = MakeButton(optionsWindow, "Open manager", 140, function()
@@ -1135,6 +1440,10 @@ loginFrame:SetScript("OnEvent", function(self)
     BindSettings()
     PruneExpired()
 
+    if settings.enabled ~= false and settings.syncBlizzard then
+        C_Timer.After(3, function() SyncToBlizzard(true) end)
+    end
+
     if not OxedHub.ModuleAPI then
         if settings.enabled ~= false then
             Install()
@@ -1146,26 +1455,25 @@ loginFrame:SetScript("OnEvent", function(self)
     OxedHub.ModuleAPI:Register({
         id       = "chatfilter",
         name     = "Chat Filter",
-        version  = "1.0.0",
+        version  = "1.2.0",
         author   = "Oxed",
         category = "chat",
-        keywords = { "chat", "spam", "ignore", "filter", "block", "mute", "words" },
-        -- Card text is clipped at about 100 characters; the rest lives in Options.
-        desc     = "Unlimited ignore list, word filters and spam blocking. Type /oxfilter to manage.",
+        keywords = { "chat", "spam", "ignore", "filter", "block", "mute", "words", "gil" },
+        desc     = "Unlimited ignore list, LFG warnings, Blizzard 50-slot sync, and spam blocking. /oxfilter",
         icon     = "Interface\\Icons\\INV_Misc_Book_09",
 
         defaults = DEFAULTS,
 
         OnOptionsShow = function() ShowOptions() end,
 
-        -- The chat filters stay registered once added -- the game has no clean
-        -- way to take one back on every build -- and fall silent while off,
-        -- through the enabled check at the top of ChatFilter.
         OnEnable = function(_, config)
             settings = config
             EnsureData()
             Install()
             SetSocialEvents(true)
+            if settings.syncBlizzard then
+                C_Timer.After(2, function() SyncToBlizzard(true) end)
+            end
         end,
 
         OnDisable = function()

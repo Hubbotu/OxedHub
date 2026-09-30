@@ -147,9 +147,11 @@ local function RefreshWorldButtons()
     local frame = bars.world
     if not frame then return end
     local allowed = IsInGroup and IsInGroup() and MayMark()
+    local alpha = allowed and 1 or 0.6
     for _, button in ipairs(frame.buttons) do
-        local art = button.flare or button.dimmable
-        if art then art:SetAlpha(allowed and 1 or 0.3) end
+        if button.flare then button.flare:SetAlpha(alpha) end
+        if button.flare2 then button.flare2:SetAlpha(alpha * 0.7) end
+        if button.dimmable then button.dimmable:SetAlpha(alpha) end
     end
 end
 
@@ -328,10 +330,17 @@ local function BuildWorldBar()
             type2 = "macro", macrotext2 = ("/cwm %d"):format(index),
         })
         local icon = button:CreateTexture(nil, "ARTWORK")
-        icon:SetPoint("CENTER")
+        icon:SetAllPoints()
         icon:SetTexture(FLARE)
         icon:SetVertexColor(unpack(WORLD_COLOURS[index]))
         button.flare = icon
+
+        local glow = button:CreateTexture(nil, "OVERLAY")
+        glow:SetAllPoints()
+        glow:SetTexture(FLARE)
+        glow:SetBlendMode("ADD")
+        glow:SetVertexColor(unpack(WORLD_COLOURS[index]))
+        button.flare2 = glow
         Tip(button, ("World marker %d"):format(index),
             "Left click puts this flare where you are standing, right click takes it away. "
             .. "Dimmed means the game will refuse it: world markers need a real group, and in a raid "
@@ -544,7 +553,7 @@ local function ShowOptions()
     if not API or not settings then return end
 
     if not optionsWindow then
-        optionsWindow = API:CreateOptionsWindow("Markers", 500, 620)
+        optionsWindow = API:CreateOptionsWindow("Markers", 500, 680)
         local w = optionsWindow
 
         w:AddCheckbox(settings, "raidBar", "Raid marks", "Skull, cross and the rest, for your target.", Redraw)

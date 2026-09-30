@@ -1301,12 +1301,12 @@ function UI:CreateDashboardTab()
     end)
 
     -- ───────────────────────────────────────────────────────────────
-    -- CARD 1: RELEASE NOTES (RELEASE 2.3.93)
+    -- CARD 1: RELEASE NOTES (RELEASE 2.3.95)
     -- ───────────────────────────────────────────────────────────────
     local relTitle = card1:CreateFontString(nil, "OVERLAY", "QuestFont_Shadow_Huge")
     relTitle:SetPoint("TOP", card1, "TOP", 0, -12)
     relTitle:SetTextColor(1, 0.82, 0, 1)
-    relTitle:SetText(L["RELEASE_TITLE"] or "Release 2.3.93")
+    relTitle:SetText(L["RELEASE_TITLE"] or "Release 2.3.95")
     local rName, rHeight, rFlags = relTitle:GetFont()
     if rName then relTitle:SetFont(rName, rHeight * 1.1, rFlags) end
 
@@ -1372,11 +1372,11 @@ function UI:CreateDashboardTab()
     -- describing features that shipped many versions ago -- so an update
     -- looked like nothing had changed. Keep it to what is actually new.
     local relLines = {
+        "•  Chat Filter upgraded: LFG leader highlight in red, tooltip notes, Blizzard 50 sync.",
+        "•  Chat Filter UI: live search bar, Add Target, Prune (90d+), and live filter tester.",
+        "•  New module: Experience Bar: modern XP bar with completed quests overlay & rate.",
         "•  New module: Currency Transfer: quickly transfer account-wide currencies.",
         "•  New module: BRes & Lust Tracker: battle res charges and Sated, on screen.",
-        "•  Switch it on yourself on the Modules page: every module ships off.",
-        "•  New module: Gold World Quests: gold quests, assignments, weekly caches, a route.",
-        "•  Lighter in a fight: far less memory garbage, so fewer pauses to clear it.",
         "•  Grab either pack from CurseForge:",
     }
 

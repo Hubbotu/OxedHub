@@ -119,20 +119,6 @@ end
 
 -- Every sound the player has in OxedHub. The library is shared across
 -- characters, so the list is the same wherever you happen to be flying.
-local function SoundList(filter)
-    local library = (OxedHub.GetSharedCustomSounds and OxedHub:GetSharedCustomSounds())
-        or (OxedHub.db and OxedHub.db.profile and OxedHub.db.profile.customSounds) or {}
-    local list = {}
-    filter = (filter or ""):lower()
-    for id, sound in pairs(library) do
-        local name = sound and sound.name or id
-        if type(name) == "string" and (filter == "" or name:lower():find(filter, 1, true)) then
-            list[#list + 1] = { id = id, name = name }
-        end
-    end
-    table.sort(list, function(a, b) return a.name:lower() < b.name:lower() end)
-    return list
-end
 
 local function SoundName(id)
     if not id or id == "" then return "The game's ready check sound" end
@@ -331,6 +317,37 @@ local function InstallHooks()
         local okName, name = pcall(TaxiNodeName, slot)
         Start(okName and SafeName(name) or nil)
     end)
+
+    local addingTooltip = false
+    if GameTooltip and GameTooltip.Show then
+        hooksecurefunc(GameTooltip, "Show", function(self)
+            if addingTooltip then return end
+            if not settings or settings.enabled == false then return end
+            
+            local owner = self:GetOwner()
+            if not owner then return end
+            
+            local name = owner.GetName and owner:GetName()
+            local isRetailFlightPin = type(owner.taxiNodeData) == "table"
+            local isClassicTaxiBtn = name and type(name) == "string" and name:match("^TaxiButton")
+            if not (isRetailFlightPin or isClassicTaxiBtn) then return end
+            
+            local text = GameTooltipTextLeft1 and GameTooltipTextLeft1:GetText()
+            if not text then return end
+            
+            local from = CurrentNode()
+            local to = SafeName(text)
+            if not from or not to or from == to then return end
+            
+            local time = KnownTime(from, to)
+            if time then
+                addingTooltip = true
+                self:AddLine("Duration: " .. Clock(time), 1, 1, 1)
+                self:Show()
+                addingTooltip = false
+            end
+        end)
+    end
 end
 
 watcher:SetScript("OnEvent", function(_, event)
@@ -424,119 +441,7 @@ local function AddSlider(w, key, caption, minValue, maxValue, step, format)
     w.cursorY = w.cursorY - 30
 end
 
-local soundWindow
 
-local function BuildSoundPicker()
-    if soundWindow then return soundWindow end
-    local ok, window = pcall(CreateFrame, "Frame", "OxedHubFlightSound", UIParent, "BasicFrameTemplate")
-    if not ok or not window then return nil end
-
-    window:SetSize(320, 420)
-    window:SetPoint("CENTER")
-    window:SetFrameStrata("FULLSCREEN_DIALOG")
-    window:SetMovable(true)
-    window:EnableMouse(true)
-    window:RegisterForDrag("LeftButton")
-    window:SetScript("OnDragStart", window.StartMoving)
-    window:SetScript("OnDragStop", window.StopMovingOrSizing)
-    if window.TitleText then window.TitleText:SetText("Landing sound") end
-    tinsert(UISpecialFrames, "OxedHubFlightSound")
-
-    -- ⚠ SetAutoFocus(false): a new EditBox takes the keyboard the moment it
-    -- exists, and an addon that swallows every key is unusable.
-    local search = CreateFrame("EditBox", nil, window, "InputBoxTemplate")
-    search:SetAutoFocus(false)
-    search:SetSize(250, 20)
-    search:SetPoint("TOPLEFT", window, "TOPLEFT", 18, -32)
-
-    local hint = window:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    hint:SetPoint("TOPLEFT", search, "BOTTOMLEFT", 0, -4)
-    hint:SetText("Click to pick, right-click to hear it first.")
-
-    local scroll = CreateFrame("ScrollFrame", nil, window)
-    scroll:SetPoint("TOPLEFT", window, "TOPLEFT", 14, -66)
-    scroll:SetPoint("BOTTOMRIGHT", window, "BOTTOMRIGHT", -26, 46)
-    local content = CreateFrame("Frame", nil, scroll)
-    content:SetSize(260, 1)
-    scroll:SetScrollChild(content)
-    scroll:EnableMouseWheel(true)
-    scroll:SetScript("OnMouseWheel", function(self, delta)
-        local limit = math.max(0, (content:GetHeight() or 0) - (self:GetHeight() or 0))
-        self:SetVerticalScroll(math.max(0, math.min(limit, self:GetVerticalScroll() - delta * 40)))
-    end)
-    if OxedHub.UIComponents and OxedHub.UIComponents.Scroll then
-        OxedHub.UIComponents.Scroll.StyleFrame(scroll)
-    end
-    scroll:HookScript("OnSizeChanged", function(self) content:SetWidth(self:GetWidth()) end)
-
-    local rows = {}
-    local function Refresh()
-        -- The game's own sound comes first, as the way back to the default.
-        local list = { { id = "", name = "The game's ready check sound" } }
-        for _, entry in ipairs(SoundList(search:GetText())) do list[#list + 1] = entry end
-
-        local y = 0
-        for index, entry in ipairs(list) do
-            local row = rows[index]
-            if not row then
-                row = CreateFrame("Button", nil, content)
-                row:SetHeight(20)
-                row:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-                row.text = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-                row.text:SetPoint("LEFT", row, "LEFT", 6, 0)
-                row.text:SetPoint("RIGHT", row, "RIGHT", -6, 0)
-                row.text:SetJustifyH("LEFT")
-                row:SetHighlightTexture("Interface\\Buttons\\UI-Listbox-Highlight", "ADD")
-                rows[index] = row
-            end
-            row.entry = entry
-            row.text:SetText(settings.sound == entry.id
-                and ("|cffffd100%s|r"):format(entry.name) or entry.name)
-            row:ClearAllPoints()
-            row:SetPoint("TOPLEFT", content, "TOPLEFT", 0, -y)
-            row:SetPoint("TOPRIGHT", content, "TOPRIGHT", 0, -y)
-            row:SetScript("OnClick", function(self, button)
-                if button == "RightButton" then
-                    local was = settings.sound
-                    settings.sound = self.entry.id
-                    PlayWarning()
-                    settings.sound = was
-                    return
-                end
-                settings.sound = self.entry.id
-                Refresh()
-                if optionsWindow and optionsWindow.soundLabel then
-                    optionsWindow.soundLabel:SetText("Landing sound: " .. SoundName(settings.sound))
-                end
-            end)
-            row:Show()
-            y = y + 20
-        end
-        for index = #list + 1, #rows do rows[index]:Hide() end
-        content:SetHeight(math.max(1, y))
-    end
-    window.Refresh = Refresh
-
-    search:SetScript("OnTextChanged", Refresh)
-    search:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-
-    local test = CreateFrame("Button", nil, window, "UIPanelButtonTemplate")
-    test:SetSize(120, 22)
-    test:SetPoint("BOTTOMLEFT", window, "BOTTOMLEFT", 16, 14)
-    test:SetText("Hear it")
-    test:SetScript("OnClick", PlayWarning)
-
-    local close = CreateFrame("Button", nil, window, "UIPanelButtonTemplate")
-    close:SetSize(100, 22)
-    close:SetPoint("BOTTOMRIGHT", window, "BOTTOMRIGHT", -16, 14)
-    close:SetText("Done")
-    close:SetScript("OnClick", function() window:Hide() end)
-
-    window:SetScript("OnShow", Refresh)
-    window:Hide()
-    soundWindow = window
-    return window
-end
 
 local function PickColour()
     if not ColorPickerFrame or not ColorPickerFrame.SetupColorPickerAndShow then return end
@@ -581,8 +486,24 @@ local function ShowOptions()
         pickSound:SetPoint("TOPLEFT", w, "TOPLEFT", 250, w.cursorY - 2)
         pickSound:SetText("Choose a sound")
         pickSound:SetScript("OnClick", function()
-            local window = BuildSoundPicker()
-            if window then window:SetShown(not window:IsShown()) end
+            if OxedHub.Triggers and OxedHub.Triggers.ShowSoundPicker then
+                local current = settings.sound or ""
+                local mock = { actions = { sound = current } }
+                OxedHub.Triggers:ShowSoundPicker(
+                    mock,
+                    "sound",
+                    function(id)
+                        if not id or id == "" or id == "None" or id == "none" then
+                            settings.sound = ""
+                        else
+                            settings.sound = id
+                        end
+                        if w.soundLabel then
+                            w.soundLabel:SetText("Landing sound: " .. SoundName(settings.sound))
+                        end
+                    end
+                )
+            end
         end)
         w.cursorY = w.cursorY - 30
         w:HookScript("OnShow", function()
