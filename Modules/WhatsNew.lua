@@ -25,6 +25,19 @@ local KIND_COLORS = {
 -- changed in between.
 WhatsNew.RELEASES = {
     {
+        version = "2.3.96",
+        important = true,
+        lines = {
+            { "ADDED", "Action Hub tints a node red while your target is out of its range, the way the default bars do. Range Check in a hub's settings turns it off for that hub." },
+            { "CHANGED", "Action Hub costs a third of what it did: an item cooldown no longer redraws every node on every cast, a swipe already showing the right cooldown is left alone, a proc only wakes the nodes that show its spell, and the range check runs five times a second instead of twelve." },
+            { "FIXED", "Action Hub's range check could raise an error in a fight, where the game keeps the target's state secret." },
+            { "CHANGED", "Gold World Quests scans one zone a frame instead of all of them at once, and no longer builds a debug string for every quest: a scan that froze the game for 8 ms is now a few short frames." },
+            { "FIXED", "Copy Chat shows its button on Chattynator's windows again. The current Chattynator keeps its windows one level deeper than before, and a window on its everything tab was not recognised at all." },
+            { "CHANGED", "Mail no longer covers the mailbox with explanations when the mouse passes over its buttons. Explain the buttons, in the module's Options, brings them back." },
+            { "CHANGED", "Action Hub is now five files instead of one of ten thousand lines: the hub data, what a node shows, the hubs on screen, the settings tab and the slot picker. Nothing changes in the game; the performance report names the hubs on screen and the settings separately." },
+        },
+    },
+    {
         version = "2.3.95",
         important = true,
         lines = {

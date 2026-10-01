@@ -191,109 +191,135 @@ local function QuestTitle(id)
     return title or ("Quest " .. tostring(id))
 end
 
-scan = function()
-    if not settings or settings.enabled == false then return end
-    local list, seen, unloaded, sa, active, skipped = {}, {}, 0, {}, {}, {}
-    local getQuests = (C_TaskQuest and (C_TaskQuest.GetQuestsOnMap or C_TaskQuest.GetQuestsForPlayerByMapID))
+-- ── Remembered names ──────────────────────────────────────────────────────
+-- A quest's title and zone do not change while it is up, and asking for them
+-- costs a map info table each time. Kept per quest id; the fallbacks ("Quest
+-- 12345", the scan zone's own name) are not kept, so a title that was still
+-- loading is asked for again next time.
+local titleCache, zoneCache = {}, {}
 
+local function CachedTitle(id)
+    local title = titleCache[id]
+    if title then return title end
+    title = QuestTitle(id)
+    if title ~= ("Quest " .. tostring(id)) then titleCache[id] = title end
+    return title
+end
+
+local function CachedZone(id, fallback)
+    local zone = zoneCache[id]
+    if zone then return zone end
+    zone = ZoneName(id, nil)
+    if zone then
+        zoneCache[id] = zone
+        return zone
+    end
+    return fallback
+end
+
+-- ── The scan, a zone a frame ──────────────────────────────────────────────
+-- ⚠ /oxprofile caught the whole scan in one go at 8 ms and 170 KB, a third of
+-- a frame, every time it ran. Most of that was a debug string built for every
+-- quest (each of its fields, sorted and joined) that nothing ever read, now
+-- gone, and names asked for again on every scan, now kept above. What is left
+-- is spread out: one zone per frame, so six zones cost six small frames rather
+-- than one long one. A scan asked for while one runs waits for it to finish.
+
+local job               -- the scan in progress, or nil
+local rescanWanted = false
+
+local function ScanZone(z, j)
+    local getQuests = C_TaskQuest and (C_TaskQuest.GetQuestsOnMap or C_TaskQuest.GetQuestsForPlayerByMapID)
     if not getQuests then return end
+    local ok, infos = pcall(getQuests, z[1])
+    if not (ok and type(infos) == "table") then return end
 
-    for _, z in ipairs(Data.ZONES or {}) do
-        local ok, infos = pcall(getQuests, z[1])
-        if ok and infos and type(infos) == "table" then
-            for _, info in ipairs(infos) do
-                local id = info.questID
-                if id and not seen[id] then
-                    seen[id] = true
-                    if C_QuestLog and C_QuestLog.IsWorldQuest and C_QuestLog.IsWorldQuest(id) then
-                        knownZone[id] = ZoneName(id, z[2])
-                    end
-                    local left = C_TaskQuest and C_TaskQuest.GetQuestTimeLeftSeconds and C_TaskQuest.GetQuestTimeLeftSeconds(id)
+    for _, info in ipairs(infos) do
+        local id = info.questID
+        if id and not j.seen[id] then
+            j.seen[id] = true
+            local isWQ = C_QuestLog and C_QuestLog.IsWorldQuest and C_QuestLog.IsWorldQuest(id)
+            if isWQ then
+                knownZone[id] = CachedZone(id, z[2])
+            end
+            local left = C_TaskQuest and C_TaskQuest.GetQuestTimeLeftSeconds and C_TaskQuest.GetQuestTimeLeftSeconds(id)
 
-                    local flags = {}
-                    for k, v in pairs(info) do
-                        if v == true then flags[#flags + 1] = tostring(k) end
-                    end
-                    table.sort(flags)
-                    local tag = C_QuestLog and C_QuestLog.GetQuestTagInfo and C_QuestLog.GetQuestTagInfo(id)
-                    local tagName = tag and tag.tagName
-                    local flagText = table.concat(flags, ",") .. (tagName and (" tag=" .. tagName) or "")
+            local reason = nil
+            if not isWQ then
+                reason = "not a world quest"
+            elseif not (C_TaskQuest and C_TaskQuest.IsActive and C_TaskQuest.IsActive(id)) then
+                reason = "not active"
+            elseif left and left <= 0 then
+                reason = "expired"
+            elseif C_QuestLog and C_QuestLog.IsQuestFlaggedCompleted and C_QuestLog.IsQuestFlaggedCompleted(id) then
+                reason = "completed"
+            end
 
-                    local reason = nil
-                    if not (C_QuestLog and C_QuestLog.IsWorldQuest and C_QuestLog.IsWorldQuest(id)) then
-                        reason = "not a world quest"
-                    elseif not (C_TaskQuest and C_TaskQuest.IsActive and C_TaskQuest.IsActive(id)) then
-                        reason = "not active"
-                    elseif left and left <= 0 then
-                        reason = "expired"
-                    elseif C_QuestLog and C_QuestLog.IsQuestFlaggedCompleted and C_QuestLog.IsQuestFlaggedCompleted(id) then
-                        reason = "completed"
-                    end
-
-                    if reason then
-                        skipped[#skipped + 1] = {
-                            id = id, title = QuestTitle(id), zone = ZoneName(id, z[2]),
-                            reason = reason, flags = flagText,
-                            mapID = z[1], x = info.x, y = info.y, left = left
-                        }
-                    else
-                        local ex, ey, emap = info.x, info.y, z[1]
-                        local zid = C_TaskQuest and C_TaskQuest.GetQuestZoneID and C_TaskQuest.GetQuestZoneID(id)
-                        if zid and zid > 0 and zid ~= z[1] and C_TaskQuest and C_TaskQuest.GetQuestLocation then
-                            local lx, ly = C_TaskQuest.GetQuestLocation(id, zid)
-                            if lx and ly then ex, ey, emap = lx, ly, zid end
-                        end
-
-                        local entry = {
-                            id = id, title = QuestTitle(id), zone = ZoneName(id, z[2]), mapID = emap,
-                            x = ex, y = ey, left = left, copper = 0, flags = flagText
-                        }
-
-                        local isSA = (info.isCapstone == true)
-                            or (tagName and tagName:lower():find("assignment") ~= nil) or false
-                        local rewNames = {}
-                        local loaded = (not HaveQuestRewardData) or HaveQuestRewardData(id)
-                        if loaded then
-                            entry.copper = (GetQuestLogRewardMoney and GetQuestLogRewardMoney(id)) or 0
-                            local numRewards = (GetNumQuestLogRewards and GetNumQuestLogRewards(id)) or 0
-                            for i = 1, numRewards do
-                                local rname = GetQuestLogRewardInfo and GetQuestLogRewardInfo(i, id)
-                                if rname then
-                                    rewNames[#rewNames + 1] = rname
-                                    if rname:find("Fabled") and rname:find("Cache") then isSA = true end
-                                end
-                            end
-                        else
-                            if C_TaskQuest and C_TaskQuest.RequestPreloadRewardData then
-                                C_TaskQuest.RequestPreloadRewardData(id)
-                            end
-                            unloaded = unloaded + 1
-                        end
-
-                        active[#active + 1] = {
-                            entry = entry,
-                            rew = loaded and table.concat(rewNames, ", ") or "(reward not loaded)"
-                        }
-                        if entry.copper > 0 then list[#list + 1] = entry end
-                        if isSA then sa[#sa + 1] = entry end
-                    end
+            if reason then
+                j.skipped[#j.skipped + 1] = {
+                    id = id, title = CachedTitle(id), zone = CachedZone(id, z[2]),
+                    reason = reason, mapID = z[1], x = info.x, y = info.y, left = left,
+                }
+            else
+                local ex, ey, emap = info.x, info.y, z[1]
+                local zid = C_TaskQuest and C_TaskQuest.GetQuestZoneID and C_TaskQuest.GetQuestZoneID(id)
+                if zid and zid > 0 and zid ~= z[1] and C_TaskQuest and C_TaskQuest.GetQuestLocation then
+                    local lx, ly = C_TaskQuest.GetQuestLocation(id, zid)
+                    if lx and ly then ex, ey, emap = lx, ly, zid end
                 end
+
+                local entry = {
+                    id = id, title = CachedTitle(id), zone = CachedZone(id, z[2]), mapID = emap,
+                    x = ex, y = ey, left = left, copper = 0,
+                }
+
+                local tag = C_QuestLog and C_QuestLog.GetQuestTagInfo and C_QuestLog.GetQuestTagInfo(id)
+                local tagName = tag and tag.tagName
+                local isSA = (info.isCapstone == true)
+                    or (tagName and tagName:lower():find("assignment") ~= nil) or false
+                local rewNames = {}
+                local loaded = (not HaveQuestRewardData) or HaveQuestRewardData(id)
+                if loaded then
+                    entry.copper = (GetQuestLogRewardMoney and GetQuestLogRewardMoney(id)) or 0
+                    local numRewards = (GetNumQuestLogRewards and GetNumQuestLogRewards(id)) or 0
+                    for i = 1, numRewards do
+                        local rname = GetQuestLogRewardInfo and GetQuestLogRewardInfo(i, id)
+                        if rname then
+                            rewNames[#rewNames + 1] = rname
+                            if rname:find("Fabled") and rname:find("Cache") then isSA = true end
+                        end
+                    end
+                else
+                    if C_TaskQuest and C_TaskQuest.RequestPreloadRewardData then
+                        C_TaskQuest.RequestPreloadRewardData(id)
+                    end
+                    j.unloaded = j.unloaded + 1
+                end
+
+                j.active[#j.active + 1] = {
+                    entry = entry,
+                    rew = loaded and table.concat(rewNames, ", ") or "(reward not loaded)"
+                }
+                if entry.copper > 0 then j.list[#j.list + 1] = entry end
+                if isSA then j.sa[#j.sa + 1] = entry end
             end
         end
     end
+end
 
-    table.sort(list, function(a, b) return a.copper > b.copper end)
-    table.sort(sa, function(a, b) return (a.zone or "") < (b.zone or "") end)
-    available = list
-    specials = sa
-    activeList = active
-    skippedList = skipped
-    seenPOI = seen
+local function FinishScan(j)
+    table.sort(j.list, function(a, b) return a.copper > b.copper end)
+    table.sort(j.sa, function(a, b) return (a.zone or "") < (b.zone or "") end)
+    available = j.list
+    specials = j.sa
+    activeList = j.active
+    skippedList = j.skipped
+    seenPOI = j.seen
 
     if refreshUI then refreshUI() end
 
     -- Retry preload for rewards if some weren't cached yet
-    if unloaded > 0 and retries < 5 then
+    if j.unloaded > 0 and retries < 5 then
         retries = retries + 1
         C_Timer.After(2, scan)
         return
@@ -305,6 +331,42 @@ scan = function()
         for _, q in ipairs(available) do total = total + q.copper end
         print(PREFIX .. ("%d gold world quest(s) available (%s total). Type /gwq to view."):format(#available, MoneyString(total)))
     end
+end
+
+local function StepScan()
+    local j = job
+    if not j then return end
+    if not settings or settings.enabled == false then
+        job = nil
+        return
+    end
+
+    j.zone = j.zone + 1
+    local zones = Data.ZONES or {}
+    local z = zones[j.zone]
+    if z then
+        ScanZone(z, j)
+        C_Timer.After(0, StepScan)
+        return
+    end
+
+    job = nil
+    FinishScan(j)
+    if rescanWanted then
+        rescanWanted = false
+        scan()
+    end
+end
+
+scan = function()
+    if not settings or settings.enabled == false then return end
+    if not (C_TaskQuest and (C_TaskQuest.GetQuestsOnMap or C_TaskQuest.GetQuestsForPlayerByMapID)) then return end
+    if job then
+        rescanWanted = true
+        return
+    end
+    job = { zone = 0, list = {}, seen = {}, unloaded = 0, sa = {}, active = {}, skipped = {} }
+    StepScan()
 end
 
 requestScan = function(delay)

@@ -37,6 +37,10 @@ local DEFAULTS = {
     attaching    = true,    -- the Attach button on the send page
     forwarding   = true,    -- the Forward button on an open letter
 
+    -- Off by default: the explanations are long and the tooltips sat on top
+    -- of the mailbox itself, over the letters the player was reaching for.
+    tooltips     = false,
+
     -- "contacts" and "recent" are tables and are built in BindSettings:
     -- a table in DEFAULTS is copied by reference and every character would
     -- share one address book by accident.
@@ -538,6 +542,7 @@ local function RefreshChecks()
                     end
                 end)
                 box:SetScript("OnEnter", function(self)
+                    if not settings.tooltips then return end
                     GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
                     GameTooltip:SetText("Pick this letter")
                     GameTooltip:AddLine("Then use Return or Tidy up on the bar below.", 1, 1, 1, true)
@@ -855,6 +860,7 @@ end
 
 local function BarTip(button, title, body)
     button:SetScript("OnEnter", function(self)
+        if not settings.tooltips then return end
         GameTooltip:SetOwner(self, "ANCHOR_TOP")
         GameTooltip:SetText(title, 1, 0.82, 0)
         GameTooltip:AddLine(body, 1, 1, 1, true)
@@ -1063,6 +1069,7 @@ local function EnsureForwardButton()
     forwardButton:SetText("Forward")
     forwardButton:SetScript("OnClick", AskForward)
     forwardButton:SetScript("OnEnter", function(self)
+        if not settings.tooltips then return end
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:SetText("Forward this letter")
         GameTooltip:AddLine("Its text goes to the name you give. Attachments come to your bags and are put back on the new letter, so look it over before you press Send.", 1, 1, 1, true)
@@ -1158,7 +1165,7 @@ local function ShowOptions()
     if not API or not settings then return end
 
     if not optionsWindow then
-        optionsWindow = API:CreateOptionsWindow("Mail", 480, 560)
+        optionsWindow = API:CreateOptionsWindow("Mail", 480, 590)
         local w = optionsWindow
         local function Redraw() if bar then bar.Refresh() end end
 
@@ -1179,6 +1186,7 @@ local function ShowOptions()
             "For Return picked and Tidy up. Tidy up only throws away read letters that hold nothing at all.", Redraw)
         w:AddCheckbox(settings, "attaching", "Attach from bags button", nil, Redraw)
         w:AddCheckbox(settings, "forwarding", "Forward button on an open letter")
+        w:AddCheckbox(settings, "tooltips", "Explain the buttons when the mouse is over them")
 
         w:AddNote("The bar sits under the mailbox window. Open All takes one letter at a time, a third of a second apart: mail sent to the server in a burst is partly dropped, and a dropped take leaves the letter sitting there.")
         w:AddNote("Copy to all, in the Address Book, sends the letter's subject and text to every name on the list. Attachments exist once and are never copied.")

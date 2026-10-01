@@ -295,9 +295,15 @@ end
 -- button is asked for, never every frame.
 -- One check, defined once. The old search built a fresh closure and a pcall for
 -- every frame it looked at.
+--
+-- ⚠ Not "has a filter": a window on its "everything" tab has no filter at
+-- all (filterFunc is nil), and those windows were never found. What every
+-- window does have is the message display with its SetFilter method.
 local function IsChattynatorWindow(frame)
-    return not frame:IsForbidden() and type(frame.ScrollingMessages) == "table"
-        and frame.ScrollingMessages.filterFunc ~= nil and frame.GetID ~= nil
+    if frame:IsForbidden() then return false end
+    local messages = frame.ScrollingMessages
+    return type(messages) == "table" and type(messages.SetFilter) == "function"
+        and frame.GetID ~= nil
 end
 
 -- Chattynator's windows are top-level: they hang off UIParent. The search used
@@ -308,15 +314,32 @@ end
 --
 -- A window that ever turned up somewhere deeper would lose its button, not its
 -- copy: /copychat falls back to Chattynator's own copy command.
-local function FindChattynatorWindows()
-    wipe(chattyWindows)
-    if not (ChattynatorActive() and UIParent and UIParent.GetChildren) then return chattyWindows end
-
-    local children = { UIParent:GetChildren() }
+--
+-- ⚠ They hang off Chattynator's own ChattynatorHyperlinkHandler frame now,
+-- not off UIParent: its window pool is created with that frame as the parent.
+-- Looking only under UIParent found nothing, and no button was ever shown.
+-- Both places are looked in, so an older or newer Chattynator still works.
+local function CollectWindows(parent)
+    if not (parent and parent.GetChildren) then return end
+    local children = { parent:GetChildren() }
     for _, frame in ipairs(children) do
         local ok, isWindow = pcall(IsChattynatorWindow, frame)
-        if ok and isWindow then chattyWindows[#chattyWindows + 1] = frame end
+        if ok and isWindow then
+            local seen = false
+            for _, known in ipairs(chattyWindows) do
+                if known == frame then seen = true break end
+            end
+            if not seen then chattyWindows[#chattyWindows + 1] = frame end
+        end
     end
+end
+
+local function FindChattynatorWindows()
+    wipe(chattyWindows)
+    if not ChattynatorActive() then return chattyWindows end
+
+    CollectWindows(_G.ChattynatorHyperlinkHandler)
+    if #chattyWindows == 0 then CollectWindows(UIParent) end
 
     table.sort(chattyWindows, function(a, b) return (a:GetID() or 0) < (b:GetID() or 0) end)
     return chattyWindows

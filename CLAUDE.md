@@ -16,6 +16,12 @@ error window, and the line numbers in that report are the fastest way in.
   with it. This is why nothing fires events at load time.
 - Forward-declare a local before anything references it. Assigning a `local
   function` to a table field above its definition stores `nil`, silently.
+- ActionHub is five files in `Modules\ActionHub\` (data, nodes, the hubs on
+  screen, the settings tab, the slot picker list), listed at the top of
+  `ActionHubData.lua`. A function one file needs from another goes through
+  `ActionHub._private`: set at the end of the file that defines it, taken at
+  the top of the file that uses it. Only functions; a local holding state
+  stays in the one file that changes it.
 
 ## Traps that have already cost time
 
