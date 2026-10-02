@@ -207,8 +207,39 @@ end)
 -- 1.5s by the GCD both report isActive, so a node full of toys used to spin
 -- its swirl on every unrelated cast.  Base cooldown is static and readable;
 -- combined with when the spell was last actually cast it tells the two apart.
-local function IsGlobalCooldownOnly(spellID)
+--
+-- ⚠ The cooldown's own length decides first, whenever the game lets it be
+-- read. The memory of casts below is empty after every reload, and with
+-- nothing remembered every real cooldown (a portal, a long defensive, a toy)
+-- was taken for the GCD and its swipe hidden: the swipes vanished on every
+-- /reload. Out of a fight the length is a plain number, and the GCD is never
+-- longer than 1.5 s. In a fight it is secret, and the old reasoning still
+-- applies, with one more check: if the GCD itself is not running, whatever
+-- is running cannot be the GCD.
+local GCD_SPELL = 61304
+local GCD_LONGEST = 1.6   -- seconds; a hasted or slowed GCD never passes 1.5
+
+local function ReadableLength(info)
+    local length = info and info.duration
+    if type(length) ~= "number" then return nil end
+    if issecretvalue and issecretvalue(length) then return nil end
+    return length
+end
+
+local function GlobalCooldownRunning()
+    if not (C_Spell and C_Spell.GetSpellCooldown) then return nil end
+    local ok, gcd = pcall(C_Spell.GetSpellCooldown, GCD_SPELL)
+    if not ok or type(gcd) ~= "table" then return nil end
+    -- isActive is documented as never secret.
+    if gcd.isActive == nil then return nil end
+    return gcd.isActive == true
+end
+
+local function IsGlobalCooldownOnly(spellID, info)
     if not spellID then return false end
+
+    local length = ReadableLength(info)
+    if length then return length <= GCD_LONGEST end
 
     local baseMs = 0
     if GetSpellBaseCooldown then
@@ -222,8 +253,12 @@ local function IsGlobalCooldownOnly(spellID)
     -- Has a real cooldown, but we never saw it cast (or it has long since
     -- finished), so what is running now belongs to something else.
     local last = lastCastAt[spellID]
-    if not last then return true end
-    return (GetTime() - last) > (baseMs / 1000)
+    if last then return (GetTime() - last) > (baseMs / 1000) end
+
+    -- Never seen cast this session, which is every spell after a reload.
+    -- Running while the GCD is not: a real cooldown.
+    if GlobalCooldownRunning() == false then return false end
+    return true
 end
 
 -- ⚠ A swipe already showing this very cooldown is left alone. Every pass
@@ -238,6 +273,22 @@ local function PlainNumber(value)
     return value
 end
 
+-- Whether the swipe is really drawing a cooldown that has not ended.
+-- ⚠ IsShown is not enough. Right after a reload or a loading screen the game
+-- can hand over a cooldown that is not loaded yet; the swipe set from it ends
+-- at once while the frame stays shown. Remembering only "shown, same start,
+-- same length" then skipped that node on every later pass, and its swipe was
+-- gone until the spell was cast again. A swipe that cannot be read (a secret,
+-- in a fight) is never trusted: it is set again, as it always was.
+local function SwipeRunning(cdFrame)
+    if not (cdFrame:IsShown() and cdFrame.GetCooldownTimes) then return false end
+    local ok, startMs, lengthMs = pcall(cdFrame.GetCooldownTimes, cdFrame)
+    if not ok then return false end
+    startMs, lengthMs = PlainNumber(startMs), PlainNumber(lengthMs)
+    if not (startMs and lengthMs) or lengthMs <= 0 then return false end
+    return (startMs + lengthMs) > GetTime() * 1000
+end
+
 local function PaintSlotCooldown(cdFrame, spellID, ignoreGCD)
     if not cdFrame then return false end
 
@@ -246,13 +297,13 @@ local function PaintSlotCooldown(cdFrame, spellID, ignoreGCD)
         local okInfo, info = pcall(C_Spell.GetSpellCooldown, spellID)
         -- isActive is documented as never-secret, so testing it is safe.
         local active = okInfo and type(info) == "table" and info.isActive
-        if active and ignoreGCD and IsGlobalCooldownOnly(spellID) then
+        if active and ignoreGCD and IsGlobalCooldownOnly(spellID, info) then
             active = false
         end
         if active then
             local start, length = PlainNumber(info.startTime), PlainNumber(info.duration)
             if start and length and cdFrame._ohStart == start and cdFrame._ohLength == length
-                and cdFrame._ohSpell == spellID and cdFrame:IsShown() then
+                and cdFrame._ohSpell == spellID and SwipeRunning(cdFrame) then
                 return true
             end
             local okDur, durObj = pcall(C_Spell.GetSpellCooldownDuration, spellID)
@@ -1375,6 +1426,9 @@ usabilityFrame:SetScript("OnEvent", function(_, event)
 
     if event == "PLAYER_ENTERING_WORLD" then
         OxedHub.ActionHub:RefreshAllWidgets()
+        -- A reload, a portal or any loading screen: cooldowns are read again
+        -- from scratch, a few times while the game is still loading them.
+        OxedHub.ActionHub:RefreshCooldownsAfterLoading()
     end
 
     QueueUsability()
@@ -1805,9 +1859,29 @@ cooldownEventFrame:SetScript("OnEvent", function(_, event, spellID)
 end)
 
 local REFRESH_DELAYS = { 0.05, 0.2, 0.5, 1.0 }
+
+-- Cooldowns arrive late after a loading screen; these passes catch them.
+local AFTER_LOADING = { 0.5, 1.5, 3, 6 }
+
+function ActionHub:ForgetCooldowns()
+    for _, w in ipairs(self.widgets or {}) do
+        for _, btn in ipairs((w and w.buttons) or {}) do
+            for _, cd in ipairs({ btn.cooldown1, btn.cooldown2 }) do
+                if cd then cd._ohStart, cd._ohLength, cd._ohSpell = nil, nil, nil end
+            end
+        end
+    end
+end
 local function RefreshCooldownsLater()
     if OxedHub and OxedHub.ActionHub then
         OxedHub.ActionHub:UpdateWidgetCooldowns()
+    end
+end
+
+function ActionHub:RefreshCooldownsAfterLoading()
+    self:ForgetCooldowns()
+    for _, delay in ipairs(AFTER_LOADING) do
+        C_Timer.After(delay, RefreshCooldownsLater)
     end
 end
 

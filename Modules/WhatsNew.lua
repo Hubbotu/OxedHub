@@ -25,6 +25,14 @@ local KIND_COLORS = {
 -- changed in between.
 WhatsNew.RELEASES = {
     {
+        version = "2.3.97",
+        important = true,
+        lines = {
+            { "FIXED", "Action Hub lost its cooldown swipes after a /reload or a portal: every real cooldown was taken for the global cooldown and hidden, because the addon only knew what you had cast since the last reload. Out of a fight it now goes by the length of the cooldown itself, and the swipes stay." },
+            { "FIXED", "After any loading screen, Action Hub reads every cooldown again a few times over the next seconds, so one the game hands over late still gets its swipe." },
+        },
+    },
+    {
         version = "2.3.96",
         important = true,
         lines = {
