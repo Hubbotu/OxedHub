@@ -3060,7 +3060,33 @@ function Core:HandleSlashCommand(msg)
                     print(("  AuraUtil.FindAuraByName('%s'): pcallOK=%s found=%s"):format(tostring(sName), tostring(ok2), tostring(found ~= nil)))
                 end
             end
-            -- 3) native registration API availability
+            -- 3) What the rules actually use in combat: the core's own list of
+            -- spell ids, built by the aura scan, and what that scan can see.
+            local active = Core.activeSpellIDs
+            local listSize = 0
+            if type(active) == "table" then for _ in pairs(active) do listSize = listSize + 1 end end
+            print(("  Core list: has %d = %s   (ids in list: %d)"):format(
+                sid, tostring(type(active) == "table" and active[sid] == true), listSize))
+            local okD, auraD = pcall(C_UnitAuras.GetAuraDataBySpellID, "player", sid)
+            print(("  GetAuraDataBySpellID: pcallOK=%s  found=%s"):format(tostring(okD), tostring(okD and auraD ~= nil)))
+            local seen, secretIDs, matched = 0, 0, false
+            for i = 1, 40 do
+                local okA, a = pcall(C_UnitAuras.GetAuraDataByIndex, "player", i, "HELPFUL")
+                if not okA or not a then break end
+                seen = seen + 1
+                local id = a.spellId
+                if issecretvalue and issecretvalue(id) then
+                    secretIDs = secretIDs + 1
+                    local okN, n = pcall(function() return tonumber(tostring(id)) end)
+                    if okN and n == sid then matched = true end
+                elseif id == sid then
+                    matched = true
+                end
+            end
+            print(("  Scan by index: %d buffs read, %d with secret ids, this spell among them = %s"):format(
+                seen, secretIDs, tostring(matched)))
+
+            -- 4) native registration API availability
             print(("  API present: AddAuraSound=%s AddAuraAppliedSound=%s  AddPrivateAuraAppliedSound=%s"):format(
                 tostring(C_UnitAuras and C_UnitAuras.AddAuraSound ~= nil),
                 tostring(C_UnitAuras and C_UnitAuras.AddAuraAppliedSound ~= nil),
@@ -3074,7 +3100,8 @@ function Core:HandleSlashCommand(msg)
         print("  /oxedhub emotion <name> - Trigger an emotion")
         print("  /oxedhub mix list - List saved mixes")
         print("  /oxedhub mix run <name> - Run a mix")
-        print("  /oxedhub debug - Toggle toy/mix macro debug logging")
+        print("  /oxedhub debug - Toggle debug logging (aura, trigger, toy/mix)")
+        print("  /oxedhub auratest <spellID> - What OxedHub can see of a buff (run in combat)")
         print("  /oxedhub help - Show this help")
     else
         print("Unknown command. Type |cffffff00/oxedhub help|r for available commands.")

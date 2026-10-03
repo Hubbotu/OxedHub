@@ -363,7 +363,10 @@ end
 -- ── Core update logic ───────────────────────────────────────────────────────
 
 local elapsed = 0
-local UPDATE_RATE = 0.04
+local UPDATE_RATE = 0.05   -- twenty looks a second while the target casts
+local READY_GAP = 0.2
+local readyCheckedAt, readyCached = 0, false
+local cooldownPainted = false
 
 local function ShowKick()
     if not isShowing then
@@ -378,6 +381,9 @@ local function ShowKick()
 end
 
 local function HideKick()
+    -- The next showing paints its swipe afresh, and reads the cooldown now.
+    cooldownPainted = false
+    readyCheckedAt = 0
     if isShowing then
         isShowing = false
         kickFrame.pulseAnim:Stop()
@@ -420,27 +426,38 @@ local function CastbarShielded()
     return false
 end
 
-local function Sleep(frame)
-    HideKick()
-    frame:SetScript("OnUpdate", nil)
+-- ⚠ A ticker, not OnUpdate. The loop only does work every UPDATE_RATE, but an
+-- OnUpdate script is still called on every single frame: at 150 fps that was
+-- 46 000 calls in twenty minutes, most of them only to learn it was too soon.
+-- A ticker is called exactly as often as there is work, and exists only while
+-- the target casts.
+local watchTicker
+
+local function StopWatch()
+    if watchTicker then
+        watchTicker:Cancel()
+        watchTicker = nil
+    end
 end
 
-local function OnUpdate(self, dt)
-    elapsed = elapsed + dt
-    if elapsed < UPDATE_RATE then return end
-    elapsed = 0
+local function Sleep()
+    HideKick()
+    StopWatch()
+end
+
+local function OnUpdate(self)
 
     local db = KickBarDB or DEFAULTS
 
     -- Must be enabled and have an interrupt spell
     if not db.enabled or not interruptSpellID then
-        Sleep(self)
+        Sleep()
         return
     end
 
     -- Must have an attackable, alive target
     if not UnitExists("target") or not UnitCanAttack("player", "target") or UnitIsDead("target") then
-        Sleep(self)
+        Sleep()
         return
     end
 
@@ -453,7 +470,7 @@ local function OnUpdate(self, dt)
     end
 
     if not isCasting then
-        Sleep(self)
+        Sleep()
         return
     end
 
@@ -489,8 +506,17 @@ local function OnUpdate(self, dt)
 
     -- ── Target IS casting an interruptible spell! ───────────────────────
 
-    -- Check interrupt cooldown
-    local isReady = IsInterruptReady()
+    -- Check interrupt cooldown.
+    -- ⚠ Read at most every READY_GAP, not on each 0.04 s tick: every read is
+    -- a fresh table from the game, and the loop runs the whole time the target
+    -- casts (58 000 ticks and 5 MB in half an hour). A kick coming off
+    -- cooldown shows a fifth of a second late at worst.
+    local now = GetTime()
+    if now - readyCheckedAt >= READY_GAP then
+        readyCheckedAt = now
+        readyCached = IsInterruptReady()
+    end
+    local isReady = readyCached
 
     -- If on CD and user doesn't want to see CD state, hide
     if not isReady and not db.showOnCD then
@@ -598,8 +624,14 @@ local function OnUpdate(self, dt)
         kickFrame.label:SetText("CD")
         kickFrame.pulseAnim:Stop()
         kickFrame.glowAnim:Stop()
-        PaintCooldown(kickFrame.cooldown)
+        -- Once per cooldown: the swipe runs by itself once set. Setting it
+        -- again on every tick asked the game for a new duration each time.
+        if not cooldownPainted then
+            cooldownPainted = true
+            PaintCooldown(kickFrame.cooldown)
+        end
     end
+    if isReady then cooldownPainted = false end
 
     -- Show label
     kickFrame.label:SetShown(db.showLabel ~= false)
@@ -621,10 +653,20 @@ end
 -- Starts the update loop if there is a cast worth watching right now: an
 -- attackable target that is casting or channelling. Otherwise the loop stays
 -- off and the icon hidden; the next cast on the target calls this again.
+local function Watch()
+    OnUpdate(eventFrame)
+end
+
+local function StartWatch()
+    if watchTicker then return end
+    watchTicker = C_Timer.NewTicker(UPDATE_RATE, Watch)
+    Watch()
+end
+
 local function Wake()
     if not (IsOn() and interruptSpellID and kickFrame) then
         HideKick()
-        eventFrame:SetScript("OnUpdate", nil)
+        StopWatch()
         return
     end
     local attackable = UnitExists("target") and UnitCanAttack("player", "target")
@@ -641,10 +683,10 @@ local function Wake()
     end
     local casting = attackable and (castName ~= nil or channelName ~= nil)
     if casting then
-        eventFrame:SetScript("OnUpdate", OnUpdate)
+        StartWatch()
     else
         HideKick()
-        eventFrame:SetScript("OnUpdate", nil)
+        StopWatch()
     end
 end
 
@@ -656,7 +698,7 @@ end
 
 local function StopUpdates()
     HideKick()
-    eventFrame:SetScript("OnUpdate", nil)
+    StopWatch()
 end
 
 -- The settings table, created with every default it is missing. Bound whether

@@ -2,7 +2,7 @@ local addonName, OxedHub = ...
 
 -- Configuration and Constants
 OxedHub.CONFIG = {
-    VERSION = "2.3.97",
+    VERSION = "2.3.98",
     DB_VERSION = 1,
 
     -- Shown in the Export/Import "About" panel. Edit freely.

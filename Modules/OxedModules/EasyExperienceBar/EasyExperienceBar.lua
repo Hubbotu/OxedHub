@@ -138,15 +138,19 @@ local function ScanQuestLog()
     local totalQuestXP = 0
     local totalCompleteXP = 0
 
+    -- ⚠ The quest id alone, by index. GetInfo hands back a full table for
+    -- every line of the log, headers included: 100 KB for one scan of a full
+    -- log, on every QUEST_LOG_UPDATE. A header has no quest id (0 or nil), so
+    -- it is skipped the same way.
     for index = 1, numEntries do
         local questID
-        if C_QuestLog.GetInfo then
+        if C_QuestLog.GetQuestIDForLogIndex then
+            questID = C_QuestLog.GetQuestIDForLogIndex(index)
+        elseif C_QuestLog.GetInfo then
             local info = C_QuestLog.GetInfo(index)
             if info and not info.isHeader then
                 questID = info.questID
             end
-        elseif C_QuestLog.GetQuestIDForLogIndex then
-            questID = C_QuestLog.GetQuestIDForLogIndex(index)
         end
 
         if questID and questID > 0 then
@@ -679,6 +683,14 @@ end
 
 -- ── Event Handling ─────────────────────────────────────────────────────────
 
+local questScanQueued = false
+local function RunQuestScan()
+    questScanQueued = false
+    if not settings or settings.enabled == false then return end
+    ScanQuestLog()
+    UpdateDisplay()
+end
+
 watcher:SetScript("OnEvent", function(self, event, arg1, arg2)
     if event == "PLAYER_ENTERING_WORLD" then
         ScanQuestLog()
@@ -707,8 +719,11 @@ watcher:SetScript("OnEvent", function(self, event, arg1, arg2)
         session.clientTimeMark = GetServerTime()
         UpdateDisplay()
     elseif event == "QUEST_LOG_UPDATE" or (event == "UNIT_QUEST_LOG_CHANGED" and arg1 == "player") then
-        ScanQuestLog()
-        UpdateDisplay()
+        -- These come in bursts; one scan for the whole burst.
+        if not questScanQueued then
+            questScanQueued = true
+            C_Timer.After(0.5, RunQuestScan)
+        end
     elseif event == "UPDATE_EXHAUSTION" or event == "PET_BATTLE_OPENING_START"
         or event == "PET_BATTLE_CLOSE" or event == "UPDATE_EXPANSION_LEVEL"
         or event == "MAX_EXPANSION_LEVEL_UPDATED" then

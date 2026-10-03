@@ -2657,7 +2657,7 @@ function ActionHub:RefreshWidgetForHub(hubIndex)
                 if OxedHub.ErrorJournal then OxedHub.ErrorJournal:ClearContext() end
             end
 
-            ActionHub:QueueCooldownRefresh()
+            ActionHub:QueueNodeRefresh(self)
         end)
 
         w.buttons[index] = btn
@@ -2885,7 +2885,7 @@ function ActionHub:RefreshWidgetForHub(hubIndex)
     if totalSlots > 0 and db.onScreen then
         local tick = 0
         ActionHub.cooldownTicker = C_Timer.NewTicker(0.5, function()
-            ActionHub:UpdateWidgetCooldowns()
+            ActionHub:UpdateRunningCooldowns()
             -- A proc whose event named a different spell id is still caught.
             tick = tick + 1
             if tick % 2 == 0 then ActionHub:UpdateProcGlows() end

@@ -44,6 +44,8 @@ local spellCache = setmetatable({}, { __mode = "k" })
 
 -- Whether what the list was built from is still what the rule says. Compared
 -- field by field, so checking costs nothing to build.
+local EMPTY_CONDITIONS = {}   -- shared, read only
+
 local function StillFits(cache, c)
     if cache.spellID ~= c.spellID or cache.spellName ~= c.spellName
         or cache.auraName ~= c.auraName then
@@ -59,7 +61,7 @@ local function StillFits(cache, c)
 end
 
 local function GetConfiguredSpellIDs(trigger)
-    local c = trigger.conditions or {}
+    local c = trigger.conditions or EMPTY_CONDITIONS
     local cache = spellCache[trigger]
     if cache and StillFits(cache, c) then return cache.ids end
 
@@ -253,8 +255,23 @@ local function CancelLoop(triggerId, trigger)
     end
 end
 
+-- ⚠ Kept with the rule's spell list and worked out again only when the rule
+-- changes. It was asked for every aura rule on every aura change and every
+-- quarter second in combat, and each time built a list and lower-cased three
+-- names: the 0.7 KB a check that /oxprofile pinned on My Buff.
+local IsLustTriggerNow
+
 local function IsLustTrigger(trigger)
     if not trigger then return false end
+    GetConfiguredSpellIDs(trigger)   -- refreshes the cache when the rule changed
+    local cache = spellCache[trigger]
+    if cache and cache.isLust ~= nil then return cache.isLust end
+    local answer = IsLustTriggerNow(trigger)
+    if cache then cache.isLust = answer end
+    return answer
+end
+
+IsLustTriggerNow = function(trigger)
     local ids = GetConfiguredSpellIDs(trigger)
     for _, sid in ipairs(ids) do
         if LUST_TO_DEBUFF_MAP[sid] then

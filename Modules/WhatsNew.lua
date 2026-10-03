@@ -25,6 +25,19 @@ local KIND_COLORS = {
 -- changed in between.
 WhatsNew.RELEASES = {
     {
+        version = "2.3.98",
+        important = true,
+        lines = {
+            { "FIXED", "Action Hub shows a trinket's or an on-use item's real cooldown. It showed the short lockout every on-use item shares (about 20 s) while the item itself sat on its two minutes." },
+            { "FIXED", "Action Hub no longer raises a blocked-action error when you change target in a fight: item range is protected in combat, so item nodes keep their colour until the fight ends. Spells still turn red." },
+            { "CHANGED", "Action Hub does far less after a click: only the node you pressed is looked at again, not every node five times over. The half-second check now only touches nodes whose swipe is running." },
+            { "CHANGED", "Lighter in a fight: Kick Bar checks twenty times a second instead of every frame, BRes & Lust stops asking about a Sated it already knows, the Experience Bar reads quest ids instead of whole quest entries, and the trinket trigger folds bursts of cooldown events into one look." },
+            { "CHANGED", "Screen icons with a countdown update twenty times a second instead of every frame. They look the same." },
+            { "ADDED", "Performance (/oxprofile): click Stopped on the small window to start recording, and click it again to stop." },
+            { "ADDED", "/oxedhub auratest <spell id> shows what OxedHub can see of a buff right now. In combat the game hides buffs from addons; this shows it." },
+        },
+    },
+    {
         version = "2.3.97",
         important = true,
         lines = {

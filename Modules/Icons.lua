@@ -209,7 +209,16 @@ function Icons:PlayScreenIcon(spellID, posData, duration, expirationTime, isAura
         frame.expirationTime = expTime
         frame.baseSize = size
         
+        -- ⚠ Twenty times a second, not every frame. It formatted the timer and
+        -- resized the drain on every frame the icon was up (31 000 calls in
+        -- ten minutes at 150 fps); the eye cannot tell the difference, and
+        -- the text only changes when the tenth of a second does.
+        frame.drainWait = 0
+        frame.drainTenths = nil
         frame:SetScript("OnUpdate", function(self, elapsed)
+            self.drainWait = self.drainWait + elapsed
+            if self.drainWait < 0.05 then return end
+            self.drainWait = 0
             local remaining = math.max(0, self.expirationTime - GetTime())
             if remaining <= 0 then
                 self:SetScript("OnUpdate", nil)
@@ -220,7 +229,11 @@ function Icons:PlayScreenIcon(spellID, posData, duration, expirationTime, isAura
                 return
             end
             
-            self.timerText:SetText(string.format("%.1f", remaining))
+            local tenths = math.floor(remaining * 10)
+            if tenths ~= self.drainTenths then
+                self.drainTenths = tenths
+                self.timerText:SetText(string.format("%.1f", tenths / 10))
+            end
             
             local pct = remaining / self.totalDuration
             local clipH = math.max(1, math.floor(pct * self.baseSize))

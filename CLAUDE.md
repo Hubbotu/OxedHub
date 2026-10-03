@@ -214,6 +214,13 @@ sound and says so in chat. Never add an automatic press back.
 
 Role checks are different: `CompleteLFGRoleCheck(true)` is allowed and works.
 
+### IsItemInRange is protected in combat
+
+`C_Item.IsItemInRange` (and the old global) raise ADDON_ACTION_BLOCKED when an
+addon calls them in combat, **even inside `pcall`**: pcall stops the error,
+not the blocked-action report. ActionHub's range tint asks only while
+`InCombatLockdown()` is false. Spell range (`C_Spell.IsSpellInRange`) is fine.
+
 ### C_UnitAuras.AddAuraSound is refused for addons
 
 Every call so far has raised ADDON_ACTION_BLOCKED, in or out of combat. It

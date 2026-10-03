@@ -671,6 +671,27 @@ local function ScanTrinkets(announce)
     end
 end
 
+-- Nobody is listening: nothing is scanned at all. The state is only marked
+-- stale, and the first scan once a rule is switched on is a silent one, so a
+-- cooldown that started before the rule existed is never reported.
+local scanQueued, stateStale = false, true
+
+local function RunTrinketScan()
+    scanQueued = false
+    local listening = OxedHub.Core and OxedHub.Core.HasEnabledTrigger
+        and OxedHub.Core:HasEnabledTrigger("ITEM_TRINKET")
+    if not listening then
+        stateStale = true
+        return
+    end
+    if stateStale then
+        stateStale = false
+        ScanTrinkets(false)
+        return
+    end
+    ScanTrinkets(true)
+end
+
 procWatcher:RegisterEvent("PLAYER_ENTERING_WORLD")
 procWatcher:RegisterEvent("PLAYER_EQUIPMENT_CHANGED")
 procWatcher:RegisterEvent("BAG_UPDATE_COOLDOWN")
@@ -691,22 +712,20 @@ procWatcher:SetScript("OnEvent", function(_, event, _, _, spellID)
         return
     end
 
-    -- The cooldown events fire in bursts during combat. A trinket's cooldown
-    -- does not disappear between two of them, so a tenth of a second between
-    -- scans loses nothing and keeps this off the hot path.
-    local now = GetTime()
-    if event == "ACTIONBAR_UPDATE_COOLDOWN" or event == "BAG_UPDATE_COOLDOWN" then
-        if procWatcher.lastScan and (now - procWatcher.lastScan) < 0.1 then return end
+    -- A loading screen or a new trinket: the state is taken as it is, silently.
+    if event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_EQUIPMENT_CHANGED" then
+        stateStale = false
+        ScanTrinkets(false)
+        return
     end
-    procWatcher.lastScan = now
 
-    -- Nobody is listening: keep the state current but stay quiet, so enabling a
-    -- rule later does not fire on a cooldown that started before it existed.
-    local listening = OxedHub.Core and OxedHub.Core.HasEnabledTrigger
-        and OxedHub.Core:HasEnabledTrigger("ITEM_TRINKET")
-
-    ScanTrinkets(listening and event ~= "PLAYER_ENTERING_WORLD"
-        and event ~= "PLAYER_EQUIPMENT_CHANGED")
+    -- ⚠ The cooldown events fire in bursts, several a frame in combat (5500 in
+    -- twenty minutes). One scan a tenth of a second after the first of a burst
+    -- sees the burst's end state; the events after it only find it queued.
+    if not scanQueued then
+        scanQueued = true
+        C_Timer.After(0.1, RunTrinketScan)
+    end
 end)
 
 -- Print what is actually readable about the equipped trinkets, so a silent

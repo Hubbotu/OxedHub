@@ -583,7 +583,7 @@ local function UpdateMini()
             :format(MsColour(live.msPerSecond), live.msPerSecond,
                 MsColour(live.peakFrameMs), live.peakFrameMs, fps + 0.5))
     else
-        mini.top.text:SetText(("|cffff5555Stopped|r   %d fps   right-click to record"):format(fps + 0.5))
+        mini.top.text:SetText(("|cffff5555Stopped|r   %d fps   click here to record"):format(fps + 0.5))
     end
 
     local spikes = P:GetSpikes()
@@ -701,6 +701,32 @@ local function BuildMini()
         GameTooltip:Show()
     end)
     button:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+    -- The top line is a switch too: a click on "Stopped" starts recording and
+    -- a click while recording stops it. Dragging it still moves the readout.
+    local toggle = CreateFrame("Button", nil, mini)
+    toggle:SetAllPoints(mini.top)
+    toggle:SetFrameLevel(mini.top:GetFrameLevel() + 2)
+    toggle:RegisterForClicks("LeftButtonUp")
+    toggle:RegisterForDrag("LeftButton")
+    toggle:SetScript("OnDragStart", function() mini:StartMoving() end)
+    toggle:SetScript("OnDragStop", function()
+        mini:StopMovingOrSizing()
+        SaveMiniPosition()
+    end)
+    toggle:SetScript("OnClick", function(self)
+        local P = Profiler()
+        if P:IsActive() then P:Stop() else P:Start() end
+        UpdateMini()
+        if GameTooltip:IsOwned(self) then self:GetScript("OnEnter")(self) end
+    end)
+    toggle:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_BOTTOMRIGHT")
+        GameTooltip:SetText(Profiler():IsActive() and "Click to stop recording" or "Click to start recording")
+        GameTooltip:AddLine("Drag: move", 1, 1, 1)
+        GameTooltip:Show()
+    end)
+    toggle:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
     -- Twice a second is plenty for figures that are averaged over a second.
     local elapsed = 0

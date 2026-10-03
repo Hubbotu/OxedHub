@@ -587,8 +587,49 @@ UpdateDisplay = function()
     end
 end
 
+-- Which Sated debuff the aura scan saw on the player: an id, false for none,
+-- nil when the scan has nothing to say (it is not running, or in a fight).
+local function SatedFromScan()
+    local Core = OxedHub.Core
+    local active = Core and Core.activeSpellIDs
+    if not active or next(active) == nil then return nil end
+    for spellID in pairs(SATED_IDS) do
+        if active[spellID] then return spellID end
+    end
+    return false
+end
+
+local currentSated = nil
+local lastSatedAsk = 0
+
 local function SyncLust()
     if not settings or not settings.enabled then return end
+
+    -- ⚠ Nothing to ask when nothing changed. Every aura change asked the game
+    -- for all seven Sated debuffs, and the one that is up comes back as a
+    -- new table: 2 KB per aura change, 12 MB in half an hour. The aura scan
+    -- already knows what is on the player; when it agrees with what we hold,
+    -- the game is not asked. When it cannot say, it is asked as before.
+    local seen = SatedFromScan()
+    if seen ~= nil then
+        if seen and seen == currentSated and activeAuraExpiration > 0 then return end
+        if seen == false and activeAuraExpiration == 0 then return end
+    else
+        -- The scan cannot say (in a dungeon the game keeps aura data secret).
+        -- Sated, once seen, lasts its ten minutes: until its known end there
+        -- is nothing to ask. Otherwise the seven questions are asked at most
+        -- four times a second, not on every aura change, so a lust still
+        -- shows within a quarter second.
+        local now = GetTime()
+        local known = activeAuraExpiration
+        if type(known) == "number" and not (issecretvalue and issecretvalue(known))
+            and known > now then
+            return
+        end
+        if now - lastSatedAsk < 0.25 then return end
+        lastSatedAsk = now
+    end
+
     local found = false
 
     for spellID in pairs(SATED_IDS) do
@@ -599,6 +640,7 @@ local function SyncLust()
             end
             startTime = aura.expirationTime - 600
             activeAuraExpiration = aura.expirationTime
+            currentSated = spellID
             currentLustIcon = aura.icon
             if LustFrame and LustFrame.Icon and aura.icon then
                 LustFrame.Icon:SetTexture(aura.icon)
@@ -608,14 +650,15 @@ local function SyncLust()
         end
     end
 
-    if not found then 
-        startTime = 0 
+    if not found then
+        currentSated = nil
+        startTime = 0
         activeAuraExpiration = 0
         currentLustIcon = nil
         if LustFrame and LustFrame.Icon then
             LustFrame.Icon:SetTexture(136012)
         end
-    end 
+    end
 end
 
 local watcher = CreateFrame("Frame")
@@ -643,7 +686,12 @@ watcher:SetScript("OnEvent", function(self, event, ...)
             SyncLust()
             isInitialized = true
         end)
-    elseif event == "PLAYER_REGEN_ENABLED" or event == "PLAYER_REGEN_DISABLED" or event == "UNIT_AURA" then
+    elseif event == "UNIT_AURA" then
+        -- The display ticks ten times a second by itself; redrawing it on
+        -- every aura change as well only doubled the work.
+        SyncLust()
+        return
+    elseif event == "PLAYER_REGEN_ENABLED" or event == "PLAYER_REGEN_DISABLED" then
         SyncLust()
     end
     UpdateDisplay()

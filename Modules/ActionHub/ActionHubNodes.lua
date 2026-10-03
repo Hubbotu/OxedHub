@@ -311,6 +311,7 @@ local function PaintSlotCooldown(cdFrame, spellID, ignoreGCD)
                 local okSet = pcall(cdFrame.SetCooldownFromDurationObject, cdFrame, durObj)
                 if okSet then
                     cdFrame._ohStart, cdFrame._ohLength, cdFrame._ohSpell = start, length, spellID
+                    cdFrame._ohItem = nil
                     cdFrame:Show()
                     return true
                 end
@@ -319,11 +320,113 @@ local function PaintSlotCooldown(cdFrame, spellID, ignoreGCD)
     end
 
     cdFrame._ohStart, cdFrame._ohLength, cdFrame._ohSpell = nil, nil, nil
+    cdFrame._ohItem = nil
     -- Already clear: nothing to clear again.
     if not cdFrame:IsShown() then return false end
     if cdFrame.Clear then pcall(cdFrame.Clear, cdFrame) end
     cdFrame:Hide()
     return false
+end
+
+-- ── Items ──────────────────────────────────────────────────────────────────
+-- ⚠ An item's cooldown lives on the item, not on the spell it casts. A trinket
+-- or an on-use chest piece showed the spell's cooldown, which is the short
+-- lockout every on-use item shares (about 20 s), while the item itself sat on
+-- its real two minutes. Item cooldowns come back as plain numbers, so the
+-- swipe is set from them directly; the numeric SetCooldown only refuses
+-- secret numbers, and those are never passed. If the numbers ever are secret,
+-- the item answers nil and the spell's duration object is used as before.
+
+-- The item a node uses: an item or a toy, or the item a macro uses when it
+-- casts no spell of its own.
+-- A macro's item is asked for at most once a second: the answer comes with
+-- an item link, a fresh string each time, and every pass over every macro
+-- node was making one.
+local macroItems = setmetatable({}, { __mode = "k" })   -- slot -> { id, at }
+local MacroItemNow
+
+local function SlotItemID(slot)
+    if not (slot and slot.id) then return nil end
+    if slot.type == "item" or slot.type == "toy" then return tonumber(slot.id) end
+    if slot.type == "macro" then
+        local now = GetTime()
+        local known = macroItems[slot]
+        if known and now - known.at < 1 then return known.id end
+        if not known then
+            known = {}
+            macroItems[slot] = known
+        end
+        known.id, known.at = MacroItemNow(slot), now
+        return known.id
+    end
+    return nil
+end
+
+MacroItemNow = function(slot)
+    do
+        local key = slot.label
+        if not key or (GetMacroIndexByName and GetMacroIndexByName(key) == 0) then key = slot.id end
+        if not key then return nil end
+        if GetMacroSpell and GetMacroSpell(key) then return nil end
+        local _, link = GetMacroItem and GetMacroItem(key)
+        if link and GetItemInfoInstant then return (GetItemInfoInstant(link)) end
+    end
+    return nil
+end
+
+local function ItemCooldownNumbers(itemID)
+    local get = (C_Item and C_Item.GetItemCooldown)
+        or (C_Container and C_Container.GetItemCooldown) or GetItemCooldown
+    if not get then return nil end
+    local ok, start, length = pcall(get, itemID)
+    if not ok then return nil end
+    start, length = PlainNumber(start), PlainNumber(length)
+    if not (start and length) then return nil end
+    return start, length
+end
+
+-- true: a swipe is showing; false: the item is ready; nil: could not tell,
+-- the caller should use the spell instead.
+local function PaintItemCooldown(cdFrame, itemID, ignoreGCD)
+    if not (cdFrame and itemID and cdFrame.SetCooldown) then return nil end
+    local start, length = ItemCooldownNumbers(itemID)
+    if not start then return nil end
+
+    local running = start > 0 and length > 0 and (start + length) > GetTime()
+    if running and ignoreGCD and length <= GCD_LONGEST then running = false end
+
+    if running then
+        if cdFrame._ohItem == itemID and cdFrame._ohStart == start and cdFrame._ohLength == length
+            and SwipeRunning(cdFrame) then
+            return true
+        end
+        if pcall(cdFrame.SetCooldown, cdFrame, start, length) then
+            cdFrame._ohStart, cdFrame._ohLength, cdFrame._ohSpell = start, length, nil
+            cdFrame._ohItem = itemID
+            cdFrame:Show()
+            return true
+        end
+        return nil
+    end
+
+    cdFrame._ohStart, cdFrame._ohLength, cdFrame._ohSpell = nil, nil, nil
+    cdFrame._ohItem = nil
+    if cdFrame:IsShown() then
+        if cdFrame.Clear then pcall(cdFrame.Clear, cdFrame) end
+        cdFrame:Hide()
+    end
+    return false
+end
+
+-- A node's swipe: the item's own cooldown when it holds an item, else the
+-- spell's.
+local function PaintNodeCooldown(cdFrame, slot, spellID, ignoreGCD)
+    local itemID = SlotItemID(slot)
+    if itemID then
+        local painted = PaintItemCooldown(cdFrame, itemID, ignoreGCD)
+        if painted ~= nil then return painted end
+    end
+    return PaintSlotCooldown(cdFrame, spellID, ignoreGCD)
 end
 
 -- Show how many charges a spell has left, like the stock bars do.
@@ -1333,7 +1436,7 @@ local function UpdateNodeCooldown(btn)
         local mixReady = false
         for i = 1, 2 do
             local cdFrame = i == 1 and btn.cooldown1 or btn.cooldown2
-            if PaintSlotCooldown(cdFrame, GetSlotSpellID(mixData.slots[i]), hideGCD) then
+            if PaintNodeCooldown(cdFrame, mixData.slots[i], GetSlotSpellID(mixData.slots[i]), hideGCD) then
                 StyleCooldownText(cdFrame, i == 1 and 7 or -7)
             else
                 mixReady = true
@@ -1343,7 +1446,7 @@ local function UpdateNodeCooldown(btn)
     else
         -- A direct toy, a spell, a trigger: one cooldown.
         btn.cooldown2:Hide()
-        if PaintSlotCooldown(btn.cooldown1, spellID, hideGCD) then
+        if PaintNodeCooldown(btn.cooldown1, slot, spellID, hideGCD) then
             StyleCooldownText(btn.cooldown1, 0)
             isReady = false
         end
@@ -1375,11 +1478,38 @@ function ActionHub:UpdateWidgetCooldowns()
 end
 
 -- Refresh only the usable/unusable dimming (cheap: no cooldown maths).
-function ActionHub:UpdateUsability()
+-- Only these can be unusable (see SlotUsableRaw); an emote, a marker, a ping,
+-- a macro or a trigger always answers "usable", and asking every one of them
+-- on every SPELL_UPDATE_USABLE was most of this pass. Their shading is set
+-- when the node is drawn and never changes.
+local USABILITY_KINDS = { mount = true, spell = true, toy = true, item = true }
+
+-- ⚠ The every-half-second safety pass. It used to redraw every node; a node
+-- with no swipe running cannot change without an event (a cast, a bag or a
+-- spell cooldown), and those already redraw it. What can end on its own is a
+-- running swipe, so only those nodes are looked at here, plus any node that
+-- has never been drawn.
+function ActionHub:UpdateRunningCooldowns()
     for _, w in ipairs(self.widgets or {}) do
         for _, btn in ipairs((w and w.buttons) or {}) do
             if btn and btn.slotData and btn:IsVisible() then
-                ApplyUsabilityShading(btn, IsSlotUsable(btn.slotData))
+                local cd1, cd2 = btn.cooldown1, btn.cooldown2
+                local running = (cd1 and cd1:IsShown()) or (cd2 and cd2:IsShown())
+                if running or btn._ohAnswers == nil then
+                    local ok, err = pcall(UpdateNodeCooldown, btn)
+                    if not ok then CDDebug("node update failed: " .. tostring(err)) end
+                end
+            end
+        end
+    end
+end
+
+function ActionHub:UpdateUsability()
+    for _, w in ipairs(self.widgets or {}) do
+        for _, btn in ipairs((w and w.buttons) or {}) do
+            local slot = btn and btn.slotData
+            if slot and USABILITY_KINDS[slot.type] and btn:IsVisible() then
+                ApplyUsabilityShading(btn, IsSlotUsable(slot))
             end
         end
     end
@@ -1476,8 +1606,13 @@ local function SafeIsSpellInRange(spellID, unit)
     return nil
 end
 
+-- ⚠ Never in a fight. IsItemInRange is protected in combat: the call raises
+-- ADDON_ACTION_BLOCKED for OxedHub even from inside pcall (pcall stops the
+-- error, not the report). A node holding an item keeps its normal colour
+-- until the fight ends; spells are not protected and still tint.
 local function SafeIsItemInRange(itemID, unit)
     if not itemID then return nil end
+    if InCombatLockdown() then return nil end
     unit = unit or "target"
     if C_Item and C_Item.IsItemInRange then
         local ok, inRange = pcall(C_Item.IsItemInRange, itemID, unit)
@@ -1498,13 +1633,33 @@ local function SafeIsItemInRange(itemID, unit)
     return nil
 end
 
+-- One answer per spell per sweep. Two nodes showing the same spell (a hub
+-- for each spec, a mix with a shared toy) used to ask the game twice.
+local sweepAnswers = {}
+local NO_ANSWER = {}
+
+local function SpellInRangeOnce(spellID, unit)
+    local known = sweepAnswers[spellID]
+    if known ~= nil then
+        if known == NO_ANSWER then return nil end
+        return known
+    end
+    local answer = SafeIsSpellInRange(spellID, unit)
+    if answer == nil then
+        sweepAnswers[spellID] = NO_ANSWER
+    else
+        sweepAnswers[spellID] = answer
+    end
+    return answer
+end
+
 local function CheckNodeRange(btn, unit)
     local slot = btn and btn.slotData
     if not slot or not slot.type then return nil end
 
     local slotType = slot.type
     if slotType == "spell" then
-        return SafeIsSpellInRange(slot.id, unit)
+        return SpellInRangeOnce(slot.id, unit)
     elseif slotType == "item" then
         return SafeIsItemInRange(slot.id, unit)
     elseif slotType == "toy" then
@@ -1512,12 +1667,12 @@ local function CheckNodeRange(btn, unit)
         -- node; asking again twelve times a second was most of this sweep.
         local spellID = btn._ohSpell or GetSlotSpellID(slot)
         if spellID then
-            return SafeIsSpellInRange(spellID, unit)
+            return SpellInRangeOnce(spellID, unit)
         end
     elseif slotType == "macro" then
         local spellID = btn._ohSpell or GetSlotSpellID(slot)
         if spellID then
-            return SafeIsSpellInRange(spellID, unit)
+            return SpellInRangeOnce(spellID, unit)
         end
         local key = slot.label or slot.id
         if key and GetMacroItem then
@@ -1573,6 +1728,7 @@ local function SweepRangeChecks()
         ClearAllRangeTints()
         return false
     end
+    wipe(sweepAnswers)
 
     for _, w in ipairs(ActionHub.widgets or {}) do
         local hubDB = w and w.hubIndex and ActionHub:GetHubDB(w.hubIndex)
@@ -1670,7 +1826,8 @@ function ActionHub:UpdateProcGlows()
     for _, w in ipairs(self.widgets or {}) do
         for _, btn in ipairs((w and w.buttons) or {}) do
             if btn and btn:IsShown() and btn.slotData then
-                ApplyProcGlow(btn, IsSpellProcced(GetSlotSpellID(btn.slotData)))
+                -- The spell the cooldown pass already worked out for the node.
+                ApplyProcGlow(btn, IsSpellProcced(btn._ohSpell or GetSlotSpellID(btn.slotData)))
             elseif btn then
                 ApplyProcGlow(btn, false)
             end
@@ -1882,6 +2039,32 @@ function ActionHub:RefreshCooldownsAfterLoading()
     self:ForgetCooldowns()
     for _, delay in ipairs(AFTER_LOADING) do
         C_Timer.After(delay, RefreshCooldownsLater)
+    end
+end
+
+-- ⚠ After a click, the node that was clicked, not every node. Each press
+-- used to run five full passes over all nodes in the next second (now and at
+-- 0.05, 0.2, 0.5 and 1 s): 103 presses in a dungeon were 515 full passes and
+-- most of ActionHub's garbage. The cooldown events already redraw the node;
+-- these few looks only catch a cooldown the game reports a moment late.
+local NODE_REFRESH_DELAYS = { 0.1, 0.4, 1.0 }
+
+function ActionHub:QueueNodeRefresh(btn)
+    if not btn then return self:QueueCooldownRefresh() end
+    local look = btn._ohLookAgain
+    if not look then
+        -- Made once per node, so a press makes no new function.
+        look = function()
+            if btn.slotData and btn:IsVisible() then
+                local ok, err = pcall(UpdateNodeCooldown, btn)
+                if not ok then CDDebug("node update failed: " .. tostring(err)) end
+            end
+        end
+        btn._ohLookAgain = look
+    end
+    look()
+    for _, delay in ipairs(NODE_REFRESH_DELAYS) do
+        C_Timer.After(delay, look)
     end
 end
 
