@@ -189,7 +189,14 @@ end
 
 function SS:HandlePriceEvent(event, ...)
     if event == "AUCTION_HOUSE_SHOW" then
-        if SS.db and SS.db.settings and SS.db.settings.autoScan ~= false then
+        -- ⚠ Only for a player who uses it: at least one Disenchant Insight
+        -- rule switched on. It scanned on every visit to the auction house
+        -- even with the only such rule turned off, sending queries and
+        -- filling chat for nothing. /ss can still scan by hand.
+        local Triggers = OxedHub.Triggers
+        local wanted = Triggers and Triggers.HasEnabledTriggerForEvent
+            and Triggers:HasEnabledTriggerForEvent("SHATTERSIGHT")
+        if wanted and SS.db and SS.db.settings and SS.db.settings.autoScan ~= false then
             local now = time()
             if (now - (scanState.lastAutoScan or 0)) >= 60 then
                 scanState.lastAutoScan = now

@@ -1090,7 +1090,7 @@ function Toys:ShowToyBoxesTab(parentPanel)
         -- Drag Target Hint Label
         local hintText = content:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
         hintText:SetPoint("TOPLEFT", boxTitle, "BOTTOMLEFT", 0, -4)
-        hintText:SetText("|cFF88AAFF* Drag toys to reorder or into a sidebar box. Drag boxes to reorder them. Right-click a toy to always show it. Shift+click [x] deletes without asking.|r")
+        hintText:SetText("|cFF88AAFF* Drag to reorder or into a box. Right-click: link. Shift+right-click: always show. Shift+click [x]: delete.|r")
 
         -- Scrollable Grid for Toys with MinimalScrollBar
         local gridScroll = CreateFrame("ScrollFrame", "$parent_GridScroll", content, "UIPanelScrollFrameTemplate")
@@ -1552,6 +1552,11 @@ function Toys:RefreshToyBoxesUI()
                 end
 
                 if button ~= "RightButton" or not self.toyID then return end
+                -- ⚠ Shift + right-click pins. A plain right-click copies the
+                -- Wowhead link (OnMouseUp below), and when both answered the
+                -- same click the toy was pinned too and jumped to the front of
+                -- the list every time a link was copied.
+                if not IsShiftKeyDown() then return end
 
                 -- Not from the wish list. Those are toys you do not own: pinning
                 -- one put it in front of All Toys and into the quick slots,
@@ -1691,6 +1696,7 @@ function Toys:RefreshToyBoxesUI()
                     GameTooltip:SetToyByItemID(self.toyID)
                     GameTooltip:AddLine(" ")
                     GameTooltip:AddLine("|cFF88AAFFRight-click: Copy Wowhead URL|r", 0.5, 0.8, 1.0)
+                    GameTooltip:AddLine("|cFF88AAFFShift + right-click: Always show (pin to the front)|r", 0.5, 0.8, 1.0)
                     if selectedBoxId ~= "all" then
                         GameTooltip:AddLine("|cFF00FF00Drag onto other toys to change order|r", 0.4, 1.0, 0.4)
                         if not cfg.isLocked then
@@ -1710,7 +1716,7 @@ function Toys:RefreshToyBoxesUI()
                     if cursorToyID and cursorToyID ~= self.toyID then
                         HandleDropOnGridToy(self)
                     end
-                elseif button == "RightButton" and self.toyID then
+                elseif button == "RightButton" and self.toyID and not IsShiftKeyDown() then
                     if OxedHub.ShowCopyURLDialog then
                         OxedHub:ShowCopyURLDialog(string.format("https://www.wowhead.com/item=%d/", self.toyID), select(2, C_ToyBox.GetToyInfo(self.toyID)) or "Toy")
                     end
@@ -1742,7 +1748,10 @@ function Toys:RefreshToyBoxesUI()
                 and Toys:GetMixMacroText(mixData, true)) or ""
 
             if not InCombatLockdown() then
-                btn:SetAttribute("type", cfg.isLocked and "macro" or nil)
+                -- ⚠ "type1" only, never the plain "type": that one answers every
+                -- mouse button, so a right-click (meant for the Wowhead link)
+                -- used the mix as well, counted it, and moved it up the list.
+                btn:SetAttribute("type", nil)
                 btn:SetAttribute("type1", cfg.isLocked and "macro" or nil)
                 btn:SetAttribute("macrotext", btn._macroText)
                 btn:SetAttribute("macrotext1", btn._macroText)
@@ -1785,7 +1794,9 @@ function Toys:RefreshToyBoxesUI()
             -- action would be refused anyway. Left unset, a click does nothing
             -- quietly instead of failing.
             local armed = cfg.isLocked and not isWish
-            btn:SetAttribute("type", armed and "toy" or nil)
+            -- Button 1 only (see above): right-click copies the link and must
+            -- not use the toy, count it, and reorder the list.
+            btn:SetAttribute("type", nil)
             btn:SetAttribute("type1", armed and "toy" or nil)
             btn:SetAttribute("toy", not isWish and toyID or nil)
             btn:SetAttribute("toy1", not isWish and toyID or nil)

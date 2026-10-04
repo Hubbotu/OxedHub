@@ -167,11 +167,21 @@ function Journal:Record(kind, rawMessage, rawStack)
     local key = Signature(kind, message, source, ctx)
     local entry = db[key]
 
+    -- The version it happened in. A list kept across updates otherwise mixes
+    -- problems already fixed with ones that are still there, and nothing on
+    -- the page tells them apart.
+    local version = (OxedHub.CONFIG and OxedHub.CONFIG.VERSION) or "?"
+
     if entry then
         entry.count = (entry.count or 1) + 1
         entry.lastSeen = time()
+        entry.lastVersion = version
+        -- Happened again: worth a look again, so it is marked new once more.
+        entry.seen = nil
     else
         db[key] = {
+            version = version,
+            lastVersion = version,
             kind = kind,
             message = message,
             source = source,
@@ -214,6 +224,28 @@ function Journal:GetEntries()
     return list
 end
 
+-- The running version's entries only (anything that happened in it, even if
+-- it first appeared earlier), and how many older ones that leaves out.
+-- Entries from before versions were recorded count as older.
+function Journal:CurrentVersion()
+    return (OxedHub.CONFIG and OxedHub.CONFIG.VERSION) or "?"
+end
+
+function Journal:GetEntriesForVersion(showAll)
+    local all = Journal:GetEntries()
+    if showAll then return all, 0 end
+    local current = Journal:CurrentVersion()
+    local list, hidden = {}, 0
+    for _, entry in ipairs(all) do
+        if entry.lastVersion == current then
+            list[#list + 1] = entry
+        else
+            hidden = hidden + 1
+        end
+    end
+    return list, hidden
+end
+
 function Journal:Clear()
     if type(OxedHubDB) == "table" then
         OxedHubDB.errorJournal = {}
@@ -236,6 +268,8 @@ function Journal:FormatEntry(entry, index)
     lines[#lines + 1] = ("%s[%s x%d] %s"):format(
         prefix, entry.kind or "?", entry.count or 1, entry.message or "")
     lines[#lines + 1] = ("   Feature: %s"):format(entry.area or "unknown")
+    lines[#lines + 1] = ("   Version: %s%s"):format(entry.lastVersion or "not recorded (older entry)",
+        (entry.version and entry.version ~= entry.lastVersion) and (" (first in %s)"):format(entry.version) or "")
     if entry.context then lines[#lines + 1] = ("   Where: %s"):format(entry.context) end
     if entry.source then lines[#lines + 1] = ("   Source: %s"):format(entry.source) end
     lines[#lines + 1] = ("   First seen: %s"):format(date("%d.%m.%y %H:%M:%S", entry.firstSeen or time()))

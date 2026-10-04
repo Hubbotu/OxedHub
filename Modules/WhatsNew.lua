@@ -25,6 +25,20 @@ local KIND_COLORS = {
 -- changed in between.
 WhatsNew.RELEASES = {
     {
+        version = "2.3.99",
+        important = true,
+        lines = {
+            { "FIXED", "ToyBox: a right-click copies the toy's Wowhead link and nothing else. It also used the toy and pinned it, so the toy jumped to the front of the list every time. Shift + right-click now keeps a toy always shown." },
+            { "FIXED", "ToyBox can be minimised in a fight: it disappears at once and is put away properly when the fight ends. Opening it in a fight when it was put away before waits for the fight to end, with no blocked-action error." },
+            { "CHANGED", "Action Hub settings: the preview keeps every node inside its box. A long aligned row or column is moved to the middle and scaled down to fit; the hubs on screen keep their real size." },
+            { "CHANGED", "Action Hub positioning: the blue boxes around each hub are gone, a hub with only empty nodes no longer vanishes when the screen grid is on, and every node says how to move the whole hub (Shift + drag)." },
+            { "FIXED", "Cursor: Class colour works on every theme by itself, no other tick needed." },
+            { "FIXED", "Flight Timer no longer raises errors on tooltips that belong to other parts of the game, and a route flown for the first time says First time: calculating instead of a meaningless clock." },
+            { "FIXED", "Disenchant Insight only scans the auction house when one of its rules is switched on." },
+            { "CHANGED", "Debug page: only problems from the version you are running are listed, each with its version; Show older versions brings back the rest. A problem that happens again is marked new again." },
+        },
+    },
+    {
         version = "2.3.98",
         important = true,
         lines = {

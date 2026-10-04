@@ -284,9 +284,13 @@ function ActionHub:CreateWidget(hubIndex)
         tile = true, edgeSize = 12,
         insets = { left = 2, right = 2, top = 2, bottom = 2 },
     })
-    moveOverlay:SetBackdropColor(0.1, 0.4, 0.9, 0.22)
-    moveOverlay:SetBackdropBorderColor(0.3, 0.6, 1, 0.9)
-    moveOverlay:EnableMouse(true)
+    -- ⚠ Invisible and let through. The blue box with its label sat over the
+    -- world around every hub while positioning, in the way of the grid and
+    -- of the other hubs. A hub moves with Shift + drag on any of its nodes;
+    -- this frame only stays to carry the hub's own grid dots.
+    moveOverlay:SetBackdropColor(0.1, 0.4, 0.9, 0)
+    moveOverlay:SetBackdropBorderColor(0.3, 0.6, 1, 0)
+    moveOverlay:EnableMouse(false)
     moveOverlay:RegisterForDrag("LeftButton")
     moveOverlay:SetScript("OnDragStart", function(self)
         if InCombatLockdown() then return end
@@ -316,6 +320,7 @@ function ActionHub:CreateWidget(hubIndex)
     moveLabel:SetJustifyH("CENTER")
     moveLabel:SetText(L["AH_MOVE_MODE_DRAG_SET"] or "Move Mode  â€”  drag nodes; drag here to move the whole set")
     moveLabel:SetTextColor(0.8, 0.9, 1, 1)
+    moveLabel:Hide()
     moveOverlay:Hide()
     w.moveOverlay = moveOverlay
 
@@ -561,7 +566,9 @@ function ActionHub:BeginPreviewNodeDrag(btn)
         return
     end
 
-    local scale = UIParent:GetEffectiveScale()
+    -- The node's own scale, not UIParent's: the preview canvas may be scaled
+    -- down to fit, and the node must still follow the cursor exactly.
+    local scale = btn:GetEffectiveScale()
     local cursorX, cursorY = GetCursorPosition()
     btn.dragStartCursorX = cursorX / scale
     btn.dragStartCursorY = cursorY / scale
@@ -610,10 +617,21 @@ function ActionHub:BeginPreviewNodeDrag(btn)
         local previewHeight = previewParent and previewParent:GetHeight() or 400
         local halfSize = (self:GetWidth() or 44) / 2
 
-        local minOffsetX = halfSize - self.basePreviewX
-        local maxOffsetX = (previewWidth - halfSize) - self.basePreviewX
-        local minOffsetY = (-(previewHeight - halfSize)) - self.basePreviewY
-        local maxOffsetY = (-halfSize) - self.basePreviewY
+        -- The box as it is seen: a canvas scaled down to fit shows more of
+        -- itself than its own size, centred, so the limits widen by 1/scale.
+        local fit = (previewParent and previewParent:GetScale()) or 1
+        if fit <= 0 then fit = 1 end
+        local spanX = (previewWidth / 2) / fit
+        local spanY = (previewHeight / 2) / fit
+        -- And moved: the middle of what is seen is off the canvas's middle
+        -- by the pan the fit applied.
+        local midX = previewWidth / 2 - (previewParent and previewParent.fitPanX or 0)
+        local midY = -previewHeight / 2 - (previewParent and previewParent.fitPanY or 0)
+
+        local minOffsetX = (midX - spanX + halfSize) - self.basePreviewX
+        local maxOffsetX = (midX + spanX - halfSize) - self.basePreviewX
+        local minOffsetY = (midY - spanY + halfSize) - self.basePreviewY
+        local maxOffsetY = (midY + spanY - halfSize) - self.basePreviewY
 
         newOffsetX = math.max(minOffsetX, math.min(maxOffsetX, newOffsetX))
         newOffsetY = math.max(minOffsetY, math.min(maxOffsetY, newOffsetY))
@@ -1823,14 +1841,22 @@ end
 
 function ActionHub:UpdatePreviewMoveGrid(tab)
     if not tab or not tab.moveOverlay then return end
-    local overlay = tab.moveOverlay
+    -- Drawn on the canvas, so the dots shrink with the nodes and keep lining
+    -- up with where they snap. The old dots on the overlay are put away.
+    if tab.previewCanvas and tab.moveOverlay.gridDots and not tab.moveOverlay.gridMoved then
+        for _, d in ipairs(tab.moveOverlay.gridDots) do d:Hide() end
+        tab.moveOverlay.gridMoved = true
+    end
+    local overlay = tab.previewCanvas or tab.moveOverlay
     overlay.gridDots = overlay.gridDots or {}
     for _, d in ipairs(overlay.gridDots) do d:Hide() end
 
     local gridType = self.moveGridType or "off"
     if gridType == "off" or gridType == "magnetic" then return end
 
-    local zoneHalf = 205
+    -- Wide enough to cover the whole box however the fit moved and scaled it.
+    local pan = math.max(math.abs(overlay.fitPanX or 0), math.abs(overlay.fitPanY or 0))
+    local zoneHalf = (205 + pan) / math.max(0.1, overlay:GetScale() or 1)
     local idx = 0
     local function dot(gx, gy)
         if math.abs(gx) > zoneHalf or math.abs(gy) > zoneHalf then return end
@@ -2203,12 +2229,10 @@ function ActionHub:RefreshWidgetForHub(hubIndex)
     -- Show/hide anchor
     local unlocked = not not db.widgetUnlocked
     local isMoveActive = not not moveMode
-    -- While the screen grid is up the logo and the empty "+" nodes only get in
-    -- the way: they widen the hub visually, so its real edges no longer line up
-    -- with the grid and symmetric placement becomes guesswork.
-    local gridAligning = not not ActionHub.screenGridOn
+    -- ⚠ The screen grid no longer hides anything. It used to hide the logo
+    -- and the empty "+" nodes while it was up, and a hub with nothing on it
+    -- yet vanished outright the moment the grid was switched on.
     local showLogo = (unlocked or not not db.showLogoWhenLocked or isMoveActive)
-        and not gridAligning
     w:SetMovable(unlocked or isMoveActive)
     w.anchor:ClearAllPoints()
     w.anchor:SetPoint("CENTER", w, "CENTER", db.logoOffsetX or 0, db.logoOffsetY or 0)
@@ -2389,6 +2413,17 @@ function ActionHub:RefreshWidgetForHub(hubIndex)
                 elseif s.type == "macro" then
                     GameTooltip:SetText(string.format("Macro: %s", tostring(s.label or s.id)))
                 end
+                GameTooltip:Show()
+            end
+            -- While positioning, every node (empty ones too) says how to move
+            -- the whole hub: Shift + drag is not something anyone guesses.
+            if ActionHub:IsMoveModeActive() then
+                if not GameTooltip:IsOwned(self) then
+                    GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                    GameTooltip:SetText("Move Mode", 1, 0.82, 0)
+                end
+                GameTooltip:AddLine("Drag to move this node.", 1, 1, 1)
+                GameTooltip:AddLine("Hold Shift and drag to move the whole hub.", 0.4, 0.8, 1)
                 GameTooltip:Show()
             end
             local currentStyle = db.style or "square"
@@ -2813,12 +2848,9 @@ function ActionHub:RefreshWidgetForHub(hubIndex)
             btn.slotIndex = i
             btn.slotSide = sideKey
 
-            -- Move mode normally forces empty slots visible so they can be
-            -- filled.  While aligning to the screen grid they are hidden
-            -- outright: their frames widen the hub and defeat the whole point
-            -- of lining its real edges up against the grid.
+            -- Move mode shows empty slots so they can be filled and placed,
+            -- grid or no grid (see showLogo above).
             local showEmpty = (db.widgetUnlocked or moveMode)
-                and not ActionHub.screenGridOn
             if (slot and slot.type) or showEmpty then
                 btn:Show()
                 RenderSlot(slot, btn)

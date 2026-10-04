@@ -405,14 +405,30 @@ local function HueToRGB(hue)
 end
 
 -- The Custom theme's colour: rainbow, class or picked.
+-- The player's class colour, looked up once and kept. UnitClass can answer
+-- with a secret in combat, and indexing a table with a secret is an error;
+-- the class never changes, so the first plain answer is all that is needed.
+local classR, classG, classB
+
+local function ClassColour()
+    if classR then return classR, classG, classB end
+    local ok, _, class = pcall(UnitClass, "player")
+    if not ok or type(class) ~= "string" or (issecretvalue and issecretvalue(class)) then
+        return nil
+    end
+    local colour = RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
+    if not colour then return nil end
+    classR, classG, classB = colour.r, colour.g, colour.b
+    return classR, classG, classB
+end
+
 local function CustomColour(offset)
     if settings.rainbow then
         return HueToRGB(GetTime() * 0.25 + (offset or 0))
     end
     if settings.classColour then
-        local _, class = UnitClass("player")
-        local colour = class and RAID_CLASS_COLORS and RAID_CLASS_COLORS[class]
-        if colour then return colour.r, colour.g, colour.b end
+        local r, g, b = ClassColour()
+        if r then return r, g, b end
     end
     return settings.colourR or 1, settings.colourG or 1, settings.colourB or 1
 end
@@ -422,11 +438,14 @@ end
 -- in green still runs from a bright head to a dark tail. Near-white stops
 -- keep some of their white, which is what makes the head look hot.
 local function Tinted(r, g, b, offset)
-    if not (settings.trailOwnColour or settings.rainbow) then return r, g, b end
+    if not (settings.trailOwnColour or settings.rainbow or settings.classColour) then return r, g, b end
     local tr, tg, tb
     if settings.rainbow then
         tr, tg, tb = HueToRGB(GetTime() * 0.25 + (offset or 0))
-    else
+    elseif settings.classColour then
+        tr, tg, tb = ClassColour()
+    end
+    if not tr then
         tr, tg, tb = settings.colourR or 1, settings.colourG or 1, settings.colourB or 1
     end
     local v = math.max(r, g, b)
@@ -1399,6 +1418,7 @@ local function LoadTheme(key)
             if name == "halo" and theme.noHalo then value = false end
             if name == "shadow" and theme.noShadow then value = false end
             if name == "idleSwirl" and theme.noSwirl then value = false end
+            if name == "classColour" and key ~= "custom" then value = false end
         end
         settings[name] = value
     end
@@ -1431,6 +1451,17 @@ local function BindSettings()
     end
     -- Built here, not in DEFAULTS: a table there is shared by reference.
     if type(config.themeSettings) ~= "table" then config.themeSettings = {} end
+    if not config.classColourPerTheme then
+        config.classColourPerTheme = true
+        for key, saved in pairs(config.themeSettings) do
+            if key ~= "custom" and type(saved) == "table" and saved.classColour and not saved.trailOwnColour then
+                saved.classColour = false
+            end
+        end
+        if config.theme and config.theme ~= "custom" and config.classColour and not config.trailOwnColour then
+            config.classColour = false
+        end
+    end
     settings = config
 end
 
@@ -1727,7 +1758,14 @@ local function ShowOptions()
         left.y = left.y - 30
         Check(left, "trailOwnColour", "Own colour for the trail",
             "Recolours this theme in the picked colour and keeps its shape. Untick for the theme's own colours.")
-        Check(left, "classColour", "Class colour", "Custom theme only. Untick to use your own colour.")
+        -- On its own it recolours any theme in the class colour. Built-in
+        -- themes start with it off (see LoadTheme), so none changes by itself.
+        Check(left, "classColour", "Class colour",
+            "Your class colour. On the Custom theme it is the trail's colour; on any other theme it recolours the trail and keeps its shape.",
+            function()
+                if settings.classColour then settings.rainbow = false end
+                RefreshWindow(w)
+            end)
         Check(left, "rainbow", "Rainbow", "Cycles through every colour; the trail runs through them too.")
 
         -- ── Right: every theme ──

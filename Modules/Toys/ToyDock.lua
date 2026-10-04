@@ -279,6 +279,42 @@ end
 
 function Toys:ExpandToyDock(sourceButton)
     local mini = sourceButton or self.MiniButton
+
+    -- Minimised during this fight: it never really went, so it only has to
+    -- become visible again, which is allowed in combat (Show and moving it
+    -- are not).
+    local dock = self.ToyboxFrame
+    if dock and dock.softHidden then
+        dock.minimizeWhenSafe = nil
+        dock:SoftShow()
+        if mini then mini:Hide() end
+        local profile = OxedHub.db and OxedHub.db.profile
+        if profile then profile.toyBoxDockState = "expanded" end
+        return
+    end
+
+    -- ⚠ Hidden before the fight: showing it means Show and placing it next to
+    -- the button, both protected for a frame of secure buttons, and the client
+    -- refused the move (ADDON_ACTION_BLOCKED on ClearAllPoints). It opens the
+    -- moment combat ends instead, and says so.
+    if InCombatLockdown() then
+        if not self.expandWhenSafe then
+            print("|cff00ff00OxedHub:|r ToyBox will open when you leave combat.")
+        end
+        self.expandWhenSafe = mini or true
+        if not self.expandWatcher then
+            self.expandWatcher = CreateFrame("Frame")
+            self.expandWatcher:RegisterEvent("PLAYER_REGEN_ENABLED")
+            self.expandWatcher:SetScript("OnEvent", function()
+                local pending = Toys.expandWhenSafe
+                if pending then
+                    Toys.expandWhenSafe = nil
+                    Toys:ExpandToyDock(pending ~= true and pending or nil)
+                end
+            end)
+        end
+        return
+    end
     local profile = OxedHub.db and OxedHub.db.profile
     if profile then
         profile.toyBoxDockState = "expanded"
@@ -369,17 +405,39 @@ function Toys:GetOrCreateToyboxFrame()
         conf.height = self:GetHeight()
     end
 
+    -- In combat the dock cannot be hidden: it holds secure toy buttons, and
+    -- hiding them is a protected action the client refuses. What is allowed
+    -- is making it invisible and laying a plain frame over it, so the player
+    -- sees it go at once and cannot use a toy by clicking where it was. The
+    -- real hide follows the moment combat ends.
+    function f:SoftHide()
+        self:SetAlpha(0)
+        if not self.clickShield then
+            local shield = CreateFrame("Frame", nil, UIParent)
+            shield:SetFrameStrata("DIALOG")
+            shield:EnableMouse(true)
+            shield:Hide()
+            self.clickShield = shield
+        end
+        self.clickShield:ClearAllPoints()
+        self.clickShield:SetAllPoints(self)
+        self.clickShield:Show()
+        self.softHidden = true
+    end
+
+    function f:SoftShow()
+        if self.clickShield then self.clickShield:Hide() end
+        self:SetAlpha(1)
+        self.softHidden = nil
+    end
+
     function f:Minimize()
-        -- The dock holds secure toy buttons, so hiding it in combat is a
-        -- protected action and the client refuses it: the frame stayed on
-        -- screen and the log got a blocked action. Remembered and done the
-        -- moment combat ends instead.
         if InCombatLockdown() then
-            if not self.minimizeWhenSafe then
-                -- Said out loud, or the button looks broken: clicking it in
-                -- combat did nothing at all and gave no reason.
-                print("|cff00ff00OxedHub:|r the toy dock will minimise when you leave combat.")
-            end
+            self:SoftHide()
+            local mb = Toys:GetOrCreateMiniButton()
+            mb:Show()
+            local profile = OxedHub.db and OxedHub.db.profile
+            if profile then profile.toyBoxDockState = "minimized" end
             self.minimizeWhenSafe = true
             if not self.combatWatcher then
                 self.combatWatcher = CreateFrame("Frame")
@@ -388,6 +446,7 @@ function Toys:GetOrCreateToyboxFrame()
                     if f.minimizeWhenSafe then
                         f.minimizeWhenSafe = nil
                         f:Minimize()
+                        f:SoftShow()   -- hidden for real now; ready for the next open
                     end
                 end)
             end
@@ -595,6 +654,10 @@ function Toys:GetOrCreateToyboxFrame()
     -- which is why this worked here and not for other people. The grid and
     -- slot buttons were already fixed this way; these two were missed.
     randomHsBtn:RegisterForClicks("AnyDown", "AnyUp")
+    -- Right-click is ours (pin, menu): the secure action must not use the
+    -- toy on it. The plain "type" set below answers every button, so
+    -- button 2 is given an action that does nothing.
+    randomHsBtn:SetAttribute("type2", "none")
     randomHsBtn:SetAttribute("type", "toy")
     randomHsBtn:SetAttribute("type1", "toy")
     
@@ -639,6 +702,10 @@ function Toys:GetOrCreateToyboxFrame()
     randomToyBtn:SetSize(22, 20)
     randomToyBtn:SetPoint("RIGHT", randomHsBtn, "LEFT", -4, 0)
     randomToyBtn:RegisterForClicks("AnyDown", "AnyUp")
+    -- Right-click is ours (pin, menu): the secure action must not use the
+    -- toy on it. The plain "type" set below answers every button, so
+    -- button 2 is given an action that does nothing.
+    randomToyBtn:SetAttribute("type2", "none")
     randomToyBtn:SetAttribute("type", "toy")
     randomToyBtn:SetAttribute("type1", "toy")
     
@@ -776,6 +843,10 @@ function Toys:GetOrCreateToyboxFrame()
         slot:SetFrameLevel(530)
         slot:SetPoint("TOP", quickBar, "TOP", 0, -((i - 1) * 40))
         slot:RegisterForClicks("AnyDown", "AnyUp")
+        -- Right-click is ours (pin, menu): the secure action must not use the
+        -- toy on it. The plain "type" set below answers every button, so
+        -- button 2 is given an action that does nothing.
+        slot:SetAttribute("type2", "none")
         slot:RegisterForDrag("LeftButton")
         slot:SetAttribute("type", "toy")
         slot:SetAttribute("type1", "toy")
@@ -1215,6 +1286,10 @@ function Toys:GetOrCreateToyboxFrame()
         -- secure handler unreachable -- the attributes were armed correctly and
         -- the click still did nothing.
         b:RegisterForClicks("AnyDown", "AnyUp")
+        -- Right-click is ours (pin, menu): the secure action must not use the
+        -- toy on it. The plain "type" set below answers every button, so
+        -- button 2 is given an action that does nothing.
+        b:SetAttribute("type2", "none")
         b:SetAttribute("type", "toy")
 
         local icon = b:CreateTexture(nil, "ARTWORK")

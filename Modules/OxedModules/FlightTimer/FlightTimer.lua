@@ -216,6 +216,8 @@ local function Stop(landed)
     watcher:SetScript("OnUpdate", nil)
 end
 
+local FIRST_FLIGHT = "First time: calculating"
+
 local function Tick(_, elapsed)
     flight.since = (flight.since or 0) + elapsed
     if flight.since < UPDATE then return end
@@ -261,11 +263,12 @@ local function Tick(_, elapsed)
             PlayWarning()
         end
     else
-        -- A route flown for the first time: nothing to count down from, so the
-        -- bar fills slowly and the clock counts up while it is learned.
+        -- A route flown for the first time: nothing to count down from yet.
+        -- The bar stays full and still and says so; a swinging bar and a
+        -- clock counting up read as a time that meant something.
         bar:SetMinMaxValues(0, 1)
-        bar:SetValue(0.5 + math.sin(gone) * 0.15)
-        if settings.showTime then bar.time:SetText(Clock(gone)) end
+        bar:SetValue(1)
+        bar.time:SetText(FIRST_FLIGHT)
     end
 end
 
@@ -286,7 +289,7 @@ local function Start(destination)
     local names = (flight.from and flight.to) and ("%s to %s"):format(flight.from, flight.to)
         or (flight.to or "Flight")
     bar.route:SetText(names)
-    bar.time:SetText(flight.total and Clock(flight.total) or "learning this route")
+    bar.time:SetText(flight.total and Clock(flight.total) or FIRST_FLIGHT)
     bar:SetMinMaxValues(0, flight.total or 1)
     bar:SetValue(0)
     Restyle()
@@ -320,25 +323,29 @@ local function InstallHooks()
 
     local addingTooltip = false
     if GameTooltip and GameTooltip.Show then
-        hooksecurefunc(GameTooltip, "Show", function(self)
-            if addingTooltip then return end
-            if not settings or settings.enabled == false then return end
-            
+        -- ⚠ This runs for every tooltip the game shows, from every part of
+        -- the UI. Some owners are forbidden frames (the house editor's fixture
+        -- points were one): any method on them but IsForbidden is an error,
+        -- and the error landed on OxedHub eighteen times in two minutes. A
+        -- forbidden owner is left alone, and the rest runs inside pcall: a
+        -- tooltip line about a flight is never worth an error.
+        local function AddFlightLine(self)
             local owner = self:GetOwner()
             if not owner then return end
-            
+            if owner.IsForbidden and owner:IsForbidden() then return end
+
             local name = owner.GetName and owner:GetName()
             local isRetailFlightPin = type(owner.taxiNodeData) == "table"
             local isClassicTaxiBtn = name and type(name) == "string" and name:match("^TaxiButton")
             if not (isRetailFlightPin or isClassicTaxiBtn) then return end
-            
+
             local text = GameTooltipTextLeft1 and GameTooltipTextLeft1:GetText()
             if not text then return end
-            
+
             local from = CurrentNode()
             local to = SafeName(text)
             if not from or not to or from == to then return end
-            
+
             local time = KnownTime(from, to)
             if time then
                 addingTooltip = true
@@ -346,6 +353,14 @@ local function InstallHooks()
                 self:Show()
                 addingTooltip = false
             end
+        end
+
+        hooksecurefunc(GameTooltip, "Show", function(self)
+            if addingTooltip then return end
+            if not settings or settings.enabled == false then return end
+            if self.IsForbidden and self:IsForbidden() then return end
+            local ok = pcall(AddFlightLine, self)
+            if not ok then addingTooltip = false end
         end)
     end
 end

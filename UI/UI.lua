@@ -1301,12 +1301,12 @@ function UI:CreateDashboardTab()
     end)
 
     -- ───────────────────────────────────────────────────────────────
-    -- CARD 1: RELEASE NOTES (RELEASE 2.3.98)
+    -- CARD 1: RELEASE NOTES (RELEASE 2.3.99)
     -- ───────────────────────────────────────────────────────────────
     local relTitle = card1:CreateFontString(nil, "OVERLAY", "QuestFont_Shadow_Huge")
     relTitle:SetPoint("TOP", card1, "TOP", 0, -12)
     relTitle:SetTextColor(1, 0.82, 0, 1)
-    relTitle:SetText(L["RELEASE_TITLE"] or "Release 2.3.98")
+    relTitle:SetText(L["RELEASE_TITLE"] or "Release 2.3.99")
     local rName, rHeight, rFlags = relTitle:GetFont()
     if rName then relTitle:SetFont(rName, rHeight * 1.1, rFlags) end
 
@@ -1372,11 +1372,11 @@ function UI:CreateDashboardTab()
     -- describing features that shipped many versions ago -- so an update
     -- looked like nothing had changed. Keep it to what is actually new.
     local relLines = {
+        "•  ToyBox: right-click copies the link only, and it minimises in a fight.",
+        "•  Action Hub settings: the preview always fits its box; no more blue boxes on screen.",
+        "•  Cursor: Class colour works on every theme by itself.",
+        "•  Flight Timer: no tooltip errors, and First time: calculating on a new route.",
         "•  Action Hub shows a trinket's real cooldown, and no blocked-action errors in a fight.",
-        "•  Lighter in a fight: Action Hub, Kick Bar and BRes & Lust do far less work.",
-        "•  Action Hub keeps its cooldown swipes after a /reload or a portal.",
-        "•  Action Hub: red nodes when the target is out of range, and a third of the cost.",
-        "•  Gold World Quests no longer freezes a frame; Copy Chat works with Chattynator.",
         "•  Grab either pack from CurseForge:",
     }
 
@@ -5237,6 +5237,22 @@ function UI:CreateSettingsTab()
     clearBtn:SetPoint("RIGHT", copyBtn, "LEFT", -6, 0)
     clearBtn:SetText(L["DEBUG_CLEAR"] or "Clear")
 
+    -- Only this version's problems unless asked: a list kept across updates
+    -- otherwise shows errors that were fixed long ago next to today's.
+    -- Kept on OxedHubDB itself, not in errorJournal, which holds entries only.
+    local olderCheck = CreateFrame("CheckButton", nil, debugPage, "UICheckButtonTemplate")
+    olderCheck:SetSize(22, 22)
+    olderCheck:SetPoint("TOPRIGHT", copyBtn, "BOTTOMRIGHT", -150, -4)
+    olderCheck.text:SetFontObject("GameFontHighlightSmall")
+    olderCheck.text:SetText("Show older versions")
+    olderCheck:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+        GameTooltip:SetText("Show older versions", 1, 0.82, 0)
+        GameTooltip:AddLine("Off: only problems that happened in the version you are running now. On: everything kept, with the version each one last happened in.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    olderCheck:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
     -- Retry the one protected call this addon depends on.
     --
     -- The native aura sound is allowed only from an untainted call path, and
@@ -5299,7 +5315,9 @@ function UI:CreateSettingsTab()
     perfBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
     local debugScroll = CreateFrame("ScrollFrame", "OxedHubDebugScrollFrame", debugPage, "UIPanelScrollFrameTemplate")
-    debugScroll:SetPoint("TOPLEFT", debugHint, "BOTTOMLEFT", 0, -10)
+    -- Lower than the hint by enough to clear the "Show older versions" tick,
+    -- which sits under the buttons on the right.
+    debugScroll:SetPoint("TOPLEFT", debugHint, "BOTTOMLEFT", 0, -28)
     debugScroll:SetPoint("BOTTOMRIGHT", debugPage, "BOTTOMRIGHT", -30, 10)
     StyleScrollFrame(debugScroll)
 
@@ -5362,15 +5380,26 @@ function UI:CreateSettingsTab()
         local journal = OxedHub.ErrorJournal
         if not journal then return end
 
-        local entries = journal:GetEntries()
-        local count, occurrences = journal:GetSummary()
+        local showAll = type(OxedHubDB) == "table" and OxedHubDB.errorJournalShowAll == true
+        olderCheck:SetChecked(showAll)
+        local entries, hidden = journal:GetEntriesForVersion(showAll)
+        local count, occurrences = #entries, 0
+        for _, e in ipairs(entries) do occurrences = occurrences + (e.count or 1) end
+        local version = journal:CurrentVersion()
 
-
+        local summary
         if count == 0 then
-            debugSummary:SetText(L["DEBUG_NONE"] or "No problems recorded.")
+            summary = showAll and (L["DEBUG_NONE"] or "No problems recorded.")
+                or ("No problems in %s."):format(version)
+        elseif showAll then
+            summary = (L["DEBUG_SUMMARY"] or "%d problem(s), %d occurrence(s)"):format(count, occurrences)
         else
-            debugSummary:SetText((L["DEBUG_SUMMARY"] or "%d problem(s), %d occurrence(s)"):format(count, occurrences))
+            summary = ("%d problem(s) in %s, %d occurrence(s)"):format(count, version, occurrences)
         end
+        if hidden > 0 then
+            summary = summary .. ("   |cff888888%d from older versions hidden|r"):format(hidden)
+        end
+        debugSummary:SetText(summary)
 
         local y = 0
         for i, entry in ipairs(entries) do
@@ -5415,6 +5444,7 @@ function UI:CreateSettingsTab()
             row.body:SetText(entry.message or "")
 
             local meta = {}
+            meta[#meta + 1] = entry.lastVersion and ("v" .. entry.lastVersion) or "older version"
             if entry.source then meta[#meta + 1] = entry.source end
             meta[#meta + 1] = (L["DEBUG_LAST_SEEN"] or "last %s"):format(date("%d.%m %H:%M:%S", entry.lastSeen or time()))
             if (entry.count or 1) > 1 and entry.firstSeen then
@@ -5437,6 +5467,13 @@ function UI:CreateSettingsTab()
         debugScroll:SetVerticalScroll(0)
     end
     tab.RefreshDebugPage = RefreshDebugPage
+
+    olderCheck:SetScript("OnClick", function(self)
+        if type(OxedHubDB) == "table" then
+            OxedHubDB.errorJournalShowAll = self:GetChecked() and true or false
+        end
+        RefreshDebugPage()
+    end)
 
     clearBtn:SetScript("OnClick", function()
         if OxedHub.ErrorJournal then

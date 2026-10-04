@@ -42,6 +42,58 @@ local SetNodeSelected = Private.SetNodeSelected
 local StyleButton = Private.StyleButton
 local UpdateBindingLabel = Private.UpdateBindingLabel
 
+-- Fits the preview inside the box. A layout that already fits is left at
+-- its real size and place. One that does not is moved so that its own middle
+-- sits in the middle of the box, then scaled down just enough for its width
+-- and height: a long row or column off to one side used to be shrunk about
+-- the box's centre instead, which made it tiny and still let it run out.
+-- A view only: saved positions, node sizes and the hubs on screen are
+-- untouched. The pan is kept on the canvas for dragging (fitPanX / fitPanY).
+local FIT_MARGIN = 8
+local FIT_SMALLEST = 0.2
+
+function ActionHub:FitPreviewCanvas(tab)
+    local canvas = tab and tab.previewCanvas
+    if not canvas then return end
+    local width, height = canvas:GetWidth(), canvas:GetHeight()
+
+    -- The layout's bounds, in canvas units (y runs down from 0).
+    local minX, maxX, minY, maxY
+    local function Take(frame)
+        if not (frame and frame:IsShown()) then return end
+        local _, _, _, x, y = frame:GetPoint(1)
+        if not (x and y) then return end
+        local half = (frame:GetWidth() or 44) / 2
+        minX = math.min(minX or x - half, x - half)
+        maxX = math.max(maxX or x + half, x + half)
+        minY = math.min(minY or y - half, y - half)
+        maxY = math.max(maxY or y + half, y + half)
+    end
+    for _, btn in ipairs(tab.ringButtons or {}) do Take(btn) end
+    Take(tab.previewLogo)
+
+    local scale, panX, panY = 1, 0, 0
+    if minX then
+        local fits = minX >= FIT_MARGIN and maxX <= width - FIT_MARGIN
+            and maxY <= -FIT_MARGIN and minY >= -(height - FIT_MARGIN)
+        if not fits then
+            local spanX = math.max(1, maxX - minX)
+            local spanY = math.max(1, maxY - minY)
+            scale = math.min(1, (width - 2 * FIT_MARGIN) / spanX, (height - 2 * FIT_MARGIN) / spanY)
+            scale = math.max(FIT_SMALLEST, scale)
+            -- The layout's middle onto the box's middle. Offsets of a scaled
+            -- frame are in its own units, so these are canvas units.
+            panX = width / 2 - (minX + maxX) / 2
+            panY = -height / 2 - (minY + maxY) / 2
+        end
+    end
+
+    canvas.fitPanX, canvas.fitPanY = panX, panY
+    canvas:SetScale(scale)
+    canvas:ClearAllPoints()
+    canvas:SetPoint("CENTER", tab.ringContainer, "CENTER", panX, panY)
+end
+
 function ActionHub:CreateTab(contentArea)
     local tab = CreateFrame("Frame", nil, contentArea)
     tab:SetAllPoints(contentArea)
@@ -304,51 +356,64 @@ function ActionHub:CreateTab(contentArea)
     ringContainer:SetSize(534, 430)
     tab.ringContainer = ringContainer
 
-    local previewLogoFrame = CreateFrame("Frame", nil, ringContainer, "BackdropTemplate")
+    -- The preview's nodes and logo sit on this canvas, the same size as the
+    -- box and centred in it. When a layout reaches past the box (a long
+    -- aligned row, say) the canvas is scaled down about the centre until it
+    -- fits: a view only. Saved positions, node sizes and the hubs on screen
+    -- are untouched. See FitPreviewCanvas.
+    local previewCanvas = CreateFrame("Frame", nil, ringContainer)
+    previewCanvas:SetSize(534, 430)
+    previewCanvas:SetPoint("CENTER", ringContainer, "CENTER")
+    previewCanvas:SetFrameLevel(ringContainer:GetFrameLevel() + 2)
+    tab.previewCanvas = previewCanvas
+
+    local previewLogoFrame = CreateFrame("Frame", nil, previewCanvas, "BackdropTemplate")
     previewLogoFrame:SetSize(48, 48)
-    previewLogoFrame:SetFrameLevel(ringContainer:GetFrameLevel() + 20)
+    previewLogoFrame:SetFrameLevel(previewCanvas:GetFrameLevel() + 20)
     previewLogoFrame:SetMovable(true)
     previewLogoFrame:EnableMouse(true)
     previewLogoFrame:RegisterForDrag("LeftButton")
-    
+
     local previewLogoTex = previewLogoFrame:CreateTexture(nil, "OVERLAY")
     previewLogoTex:SetAllPoints()
     previewLogoTex:SetTexture("Interface\\AddOns\\OxedHub\\Media\\Textures\\logo\\128.png")
-    
+
     previewLogoFrame:SetScript("OnDragStart", function(self)
         if ActionHub.pickerDialog and ActionHub.pickerDialog.moveNodeMode then
             local activeDB = ActionHub:GetActiveHubDB()
             if not activeDB then return end
-            
-            local scale = UIParent:GetEffectiveScale()
+
+            -- The logo's own scale: the canvas may be scaled down, and a
+            -- cursor move then covers more canvas than screen.
+            local scale = self:GetEffectiveScale()
             local cursorX, cursorY = GetCursorPosition()
             self.dragStartCursorX = cursorX / scale
             self.dragStartCursorY = cursorY / scale
             self.dragStartOffsetX = activeDB.logoOffsetX or 0
             self.dragStartOffsetY = activeDB.logoOffsetY or 0
-            
+
             self:SetScript("OnUpdate", function(f)
                 local currentX, currentY = GetCursorPosition()
                 currentX = currentX / scale
                 currentY = currentY / scale
-                
+
                 local deltaX = currentX - f.dragStartCursorX
                 local deltaY = currentY - f.dragStartCursorY
                 local newOffsetX = math.floor((f.dragStartOffsetX + deltaX) + 0.5)
                 local newOffsetY = math.floor((f.dragStartOffsetY + deltaY) + 0.5)
-                
+
                 local cx, cy = 256, -204
                 local rawX = cx + newOffsetX
                 local rawY = cy + newOffsetY
-                rawX, rawY = ActionHub:SnapMovePosition(ringContainer, rawX, rawY, self)
+                rawX, rawY = ActionHub:SnapMovePosition(previewCanvas, rawX, rawY, self)
                 newOffsetX = rawX - cx
                 newOffsetY = rawY - cy
-                
+
                 activeDB.logoOffsetX = newOffsetX
                 activeDB.logoOffsetY = newOffsetY
-                
+
                 f:ClearAllPoints()
-                f:SetPoint("CENTER", ringContainer, "TOPLEFT", cx + newOffsetX, cy + newOffsetY)
+                f:SetPoint("CENTER", previewCanvas, "TOPLEFT", cx + newOffsetX, cy + newOffsetY)
             end)
         end
     end)
@@ -1135,7 +1200,8 @@ function ActionHub:RefreshTab()
     end
 
     -- --- Update preview in Tab ---
-    local ringContainer = tab.ringContainer
+    -- The canvas, when there is one: everything below positions on it.
+    local ringContainer = tab.previewCanvas or tab.ringContainer
     local buttons = tab.ringButtons or {}
     for _, btn in ipairs(buttons) do
         btn:Hide()
@@ -1514,6 +1580,7 @@ function ActionHub:RefreshTab()
         end
     end
     tab.ringButtons = buttons
+    self:FitPreviewCanvas(tab)
 
     local dialog = self.pickerDialog
     local moveModeActive = dialog
@@ -1527,7 +1594,7 @@ function ActionHub:RefreshTab()
         if tab.previewLogo then
             tab.previewLogo:SetShown(db.showLogoWhenLocked or moveModeActive)
             tab.previewLogo:ClearAllPoints()
-            tab.previewLogo:SetPoint("CENTER", tab.ringContainer, "TOPLEFT", 256 + (db.logoOffsetX or 0), -204 + (db.logoOffsetY or 0))
+            tab.previewLogo:SetPoint("CENTER", tab.previewCanvas or tab.ringContainer, "TOPLEFT", 256 + (db.logoOffsetX or 0), -204 + (db.logoOffsetY or 0))
             tab.previewLogo:EnableMouse(moveModeActive)
         end
         if moveModeActive then
