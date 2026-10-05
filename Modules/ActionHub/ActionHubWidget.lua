@@ -2412,6 +2412,10 @@ function ActionHub:RefreshWidgetForHub(hubIndex)
                     GameTooltip:SetText(string.format("Spell: %s", tostring(s.label or s.id)))
                 elseif s.type == "macro" then
                     GameTooltip:SetText(string.format("Macro: %s", tostring(s.label or s.id)))
+                elseif s.type == "module" then
+                    local name, action = ActionHub:DescribeModuleNode(s.id)
+                    GameTooltip:SetText(string.format("Module: %s", name or tostring(s.id)))
+                    if action then GameTooltip:AddLine(action, 1, 1, 1) end
                 end
                 GameTooltip:Show()
             end
@@ -2687,6 +2691,8 @@ function ActionHub:RefreshWidgetForHub(hubIndex)
                     if OxedHub.Triggers and OxedHub.Triggers.ExecuteTriggerByID then
                         OxedHub.Triggers:ExecuteTriggerByID(s.id, true)
                     end
+                elseif s.type == "module" then
+                    ActionHub:RunModuleNode(s.id, button)
                 end
 
                 if OxedHub.ErrorJournal then OxedHub.ErrorJournal:ClearContext() end
@@ -2751,6 +2757,10 @@ function ActionHub:RefreshWidgetForHub(hubIndex)
                         macroText = OxedHub.Triggers:BuildTriggerMacroBody(trg) or ""
                     end
                 end
+            elseif slot.type == "module" then
+                btn.icon:SetTexture(ActionHub:GetModuleNodeIcon(slot.id))
+                btn.icon:Show()
+                -- Run in PostClick via RunModuleNode: nothing secure to arm.
             elseif slot.type == "marker" or slot.type == "targetmarker" or slot.type == "ping" then
                 btn.icon:SetTexture(GetMarkerPingIcon(slot))
                 btn.icon:Show()

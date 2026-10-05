@@ -1265,6 +1265,10 @@ function ActionHub:RefreshTab()
                     GameTooltip:SetText(string.format(L["TOOLTIP_MOUNT_FORMAT"] or "Mount: %s", tostring(s.label or s.id)))
                 elseif s.type == "item" then
                     GameTooltip:SetText(string.format(L["TOOLTIP_ITEM_FORMAT"] or "Item: %s", tostring(s.label or s.id)))
+                elseif s.type == "module" then
+                    local name, action = ActionHub:DescribeModuleNode(s.id)
+                    GameTooltip:SetText(("Module: %s"):format(name or tostring(s.id)))
+                    if action then GameTooltip:AddLine(action, 1, 1, 1) end
                 end
                 GameTooltip:Show()
             end
@@ -1510,6 +1514,9 @@ function ActionHub:RefreshTab()
                         btn.icon:SetTexture(triggerIcon)
                         btn.icon:Show()
                     end
+                elseif slot.type == "module" then
+                    btn.icon:SetTexture(ActionHub:GetModuleNodeIcon(slot.id))
+                    btn.icon:Show()
                 elseif slot.type == "marker" or slot.type == "targetmarker" or slot.type == "ping" then
                     btn.icon:SetTexture(GetMarkerPingIcon(slot))
                     btn.icon:Show()
@@ -1644,15 +1651,18 @@ function ActionHub:RefreshSidebarCategories()
         mount = false,
         item = false,
         spell = false,
+        module = true,
         settings = true,
     }
     activeDB.visibleTabs.settings = true
     -- Spellbook tab is opt-in: default OFF for existing hubs too (nil would read as
     -- "shown"). Only nil is migrated so a toggled choice persists.
     if activeDB.visibleTabs.spell == nil then activeDB.visibleTabs.spell = false end
+    -- Modules is new: shown on every hub until the player hides it.
+    if activeDB.visibleTabs.module == nil then activeDB.visibleTabs.module = true end
 
     if not activeDB.visibleTabs[dialog.selectedType] then
-        for _, catType in ipairs({"toy", "emote", "trigger", "marker", "mount", "item", "spell", "settings"}) do
+        for _, catType in ipairs({"toy", "emote", "trigger", "marker", "mount", "item", "spell", "module", "settings"}) do
             if activeDB.visibleTabs[catType] then
                 dialog.selectedType = catType
                 break
@@ -1660,7 +1670,7 @@ function ActionHub:RefreshSidebarCategories()
         end
     end
 
-    local yOffset = -120
+    local yOffset = -92
     if dialog.sidebarButtons then
         for _, container in ipairs(dialog.sidebarButtons) do
             local shown = activeDB.visibleTabs[container.catType]
@@ -1668,7 +1678,7 @@ function ActionHub:RefreshSidebarCategories()
                 container:ClearAllPoints()
                 container:SetPoint("TOPLEFT", dialog, "TOPLEFT", -34, yOffset)
                 container:Show()
-                yOffset = yOffset - 52
+                yOffset = yOffset - 48
             else
                 container:Hide()
             end
@@ -1838,6 +1848,7 @@ function ActionHub:ShowSlotPicker(slotIndex, slotSide)
             { name = "Mounts",    type = "mount",    icon = "Interface\\Icons\\MountJournalPortrait" },
             { name = "Items",     type = "item",     icon = 3753262 },
             { name = "Spells",    type = "spell",    icon = "Interface\\Icons\\INV_Misc_Book_09" },
+            { name = "Modules",   type = "module",   icon = "Interface\\Icons\\INV_Gizmo_02" },
             { name = "Settings",  type = "settings", icon = 4548872 }
         }
 
@@ -3299,6 +3310,7 @@ function ActionHub:ShowSlotPicker(slotIndex, slotSide)
             { key = "mount",    label = L["TAB_MOUNTS"] or "Mounts" },
             { key = "item",     label = L["TAB_ITEMS"] or "Items" },
             { key = "spell",    label = L["TAB_SPELLS"] or "Spellbook" },
+            { key = "module",   label = "Modules" },
         }
 
         local prevAnchor = tabsHeader
@@ -3326,13 +3338,14 @@ function ActionHub:ShowSlotPicker(slotIndex, slotSide)
                     mount = false,
                     item = false,
                     spell = false,
+                    module = true,
                     settings = true,
                 }
                 activeDB.visibleTabs[def.key] = self:GetChecked()
 
                 -- Ensure at least one tab is shown
                 local anyShown = false
-                for _, k in ipairs({"toy", "emote", "trigger", "marker", "mount", "item", "spell"}) do
+                for _, k in ipairs({"toy", "emote", "trigger", "marker", "mount", "item", "spell", "module"}) do
                     if activeDB.visibleTabs[k] then
                         anyShown = true
                         break

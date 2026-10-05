@@ -324,6 +324,128 @@ function ActionHub:GetEmoteIconById(emoteId)
     return nil
 end
 
+-- ── Module nodes ─────────────────────────────────────────────────────────────
+-- A node can open something of a built-in module: one of its windows (the
+-- quick actions a module registers, the same ones as on the minimap button's
+-- menu), its settings window, or switch it on and off. The node keeps
+-- "<module id>|<action>" as its id: "pvpprogress|q1", "goldwq|options",
+-- "mail|toggle". Names and icons are looked up when drawn, so a renamed module
+-- or a new icon shows without reassigning the node.
+local MODULE_ICON = "Interface\\Icons\\INV_Gizmo_02"
+
+local function ModuleAPI() return OxedHub.ModuleAPI end
+
+-- What a module node id stands for: the module, and the action key.
+local function SplitModuleNode(id)
+    if type(id) ~= "string" then return nil end
+    local modId, action = id:match("^([^|]+)|(.+)$")
+    return modId, action
+end
+
+-- Every action a picker can offer, sorted by module name. Quick actions are
+-- listed only for switched-on modules: a window of a module that is off has
+-- nothing to show.
+-- One node per module. On a hub, left-click opens settings and right-click
+-- switches it. A ring slot fires on release and cannot tell the mouse buttons
+-- apart, so it gets Settings and On / off as two entries, next to the
+-- module's own window actions (Gold World Quests: Show or hide).
+function ActionHub:GetModuleNodeChoices(forRing)
+    local API = ModuleAPI()
+    local list = {}
+    if not (API and API.modules) then return list end
+    local mods = {}
+    for _, mod in pairs(API.modules) do mods[#mods + 1] = mod end
+    table.sort(mods, function(a, b) return tostring(a.name or a.id) < tostring(b.name or b.id) end)
+    for _, mod in ipairs(mods) do
+        local name = tostring(mod.name or mod.id)
+        if API:IsModuleEnabled(mod.id) and type(mod.quick) == "table" then
+            for index, action in ipairs(mod.quick) do
+                list[#list + 1] = { id = mod.id .. "|q" .. index, name = name,
+                    action = tostring(action.text or "Open"), icon = mod.icon or MODULE_ICON }
+            end
+        end
+        if forRing then
+            if mod.OnOptionsShow then
+                list[#list + 1] = { id = mod.id .. "|options", name = name, action = "Settings",
+                    icon = mod.icon or MODULE_ICON }
+            end
+            list[#list + 1] = { id = mod.id .. "|toggle", name = name, action = "On / off",
+                icon = mod.icon or MODULE_ICON }
+        else
+            list[#list + 1] = { id = mod.id .. "|main", name = name,
+                action = "Left: settings, right: switch", icon = mod.icon or MODULE_ICON }
+        end
+    end
+    return list
+end
+
+-- Name, action text and icon of a module node, or nil for a module that is
+-- not there any more (uninstalled, renamed id).
+function ActionHub:DescribeModuleNode(id)
+    local API = ModuleAPI()
+    local modId, action = SplitModuleNode(id)
+    local mod = modId and API and API.modules and API.modules[modId]
+    if not mod then return nil end
+    local text
+    if action == "main" then
+        text = "Left-click: settings|nRight-click: " .. (API:IsModuleEnabled(modId) and "switch off" or "switch on")
+    elseif action == "options" then
+        text = "Settings"
+    elseif action == "toggle" then
+        text = API:IsModuleEnabled(modId) and "Switch off" or "Switch on"
+    else
+        local index = tonumber(action:match("^q(%d+)$") or "")
+        local quick = index and type(mod.quick) == "table" and mod.quick[index]
+        text = quick and tostring(quick.text or "Open") or "Open"
+    end
+    return tostring(mod.name or modId), text, mod.icon or MODULE_ICON
+end
+
+function ActionHub:GetModuleNodeIcon(id)
+    local _, _, icon = self:DescribeModuleNode(id)
+    return icon or MODULE_ICON
+end
+
+-- Runs a module node. Nothing here is protected; turning a module on or off
+-- waits for the end of a fight, since some modules show secure frames.
+function ActionHub:RunModuleNode(id, button)
+    local API = ModuleAPI()
+    local modId, action = SplitModuleNode(id)
+    if action == "main" then
+        local switch = (button == "RightButton")
+        action = switch and "toggle" or "options"
+    end
+    local mod = modId and API and API.modules and API.modules[modId]
+    if not mod then
+        print("|cff00ccffOxedHub|r that module is not there any more.")
+        return
+    end
+    local name = tostring(mod.name or modId)
+    if action == "options" then
+        if mod.OnOptionsShow then pcall(mod.OnOptionsShow, mod) end
+    elseif action == "toggle" then
+        if InCombatLockdown() then
+            print(("|cff00ccffOxedHub|r %s can be switched on or off after the fight."):format(name))
+            return
+        end
+        local on = not API:IsModuleEnabled(modId)
+        API:SetModuleEnabled(modId, on)
+        print(("|cff00ccffOxedHub|r %s %s."):format(name, on and "switched on" or "switched off"))
+        if API.RefreshModulesTab then pcall(API.RefreshModulesTab, API) end
+    else
+        if not API:IsModuleEnabled(modId) then
+            print(("|cff00ccffOxedHub|r %s is switched off. Switch it on on the Modules page."):format(name))
+            return
+        end
+        local index = tonumber(action:match("^q(%d+)$") or "")
+        local quick = index and type(mod.quick) == "table" and mod.quick[index]
+        if quick and quick.func then
+            local ok, err = pcall(quick.func)
+            if not ok then print(("|cffff5555OxedHub (%s):|r %s"):format(name, tostring(err))) end
+        end
+    end
+end
+
 -- Plays all effects for an emote ID based on its emotionMappings entry
 function ActionHub:TriggerEmoteById(emoteId)
     if not emoteId then return end

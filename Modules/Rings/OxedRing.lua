@@ -755,6 +755,9 @@ function OxedRing:RebuildSlices()
         elseif data.type == "spell" then
             local info = C_Spell and C_Spell.GetSpellInfo and C_Spell.GetSpellInfo(data.id)
             displayIcon = (info and info.iconID) or data.icon or displayIcon
+        elseif data.type == "module" then
+            local AH = OxedHub.ActionHub
+            displayIcon = (AH and AH.GetModuleNodeIcon and AH:GetModuleNodeIcon(data.id)) or data.icon or displayIcon
         elseif data.type == "trigger" then
             local trg = OxedHub.db.profile.triggers[data.id]
             if trg then
@@ -1032,6 +1035,10 @@ function OxedRing:ActivateSlice(index, isSecureRelease)
                     OxedHub.Emotes:DoEmote(mapping.emote)
                 end
             end
+        end
+    elseif data.type == "module" then
+        if OxedHub.ActionHub and OxedHub.ActionHub.RunModuleNode then
+            OxedHub.ActionHub:RunModuleNode(data.id)
         end
     elseif data.type == "trigger" then
         if OxedHub.Triggers and OxedHub.Triggers.ExecuteTriggerByID then

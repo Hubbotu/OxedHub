@@ -489,6 +489,7 @@ L["TAB_MOUNTS"] = "Mounts"
 L["TAB_ITEMS"] = "Items"
 L["TAB_SPELL"] = "Spells"
 L["TAB_SPELLS"] = "Spellbook"
+L["TAB_MODULE"] = "Modules"
 
 -- [ActionHub and OxedRing Editor Additions]
 L["AH_UNLOCK_POSITION"] = "Unlock Position"
@@ -820,7 +821,7 @@ L["ANIM_PLAY"] = "Play"
 L["ANIM_STOP"] = "Stop"
 L["ANIM_SAVE"] = "Save Animation"
 
-L["RELEASE_TITLE"] = "Release 2.3.99"
+L["RELEASE_TITLE"] = "Release 2.4.0"
 L["RELEASE_SUBTITLE"] = "What's New in this Update"
 L["ANIM_CUSTOM_TITLE"] = "Custom Animations"
 L["ANIM_CUSTOM_DESC"] = "Manage your animation library here. Use Add Animations for custom sprite-sheet setup."

@@ -25,6 +25,16 @@ local KIND_COLORS = {
 -- changed in between.
 WhatsNew.RELEASES = {
     {
+        version = "2.4.0",
+        important = true,
+        lines = {
+            { "NEW", "Action Hub: a Modules tab. Put any built-in module on a node: left-click opens its settings, right-click switches it on or off. Modules with quick actions (Gold World Quests: Show or hide) get those as nodes too." },
+            { "NEW", "OxedRing: the same Modules tab. Each module offers Settings, On / off, and its own window where it has one (Gold World Quests: Show or hide), as separate slots, since a ring slot cannot tell a left click from a right one." },
+            { "CHANGED", "Action Hub and OxedRing: the round tab buttons on the left sit higher and closer together, so every tab fits on the rail." },
+            { "FIXED", "Action Hub: the Modules tab no longer shows a raw TAB_MODULE name, and its icon no longer looks like Settings." },
+        },
+    },
+    {
         version = "2.3.99",
         important = true,
         lines = {

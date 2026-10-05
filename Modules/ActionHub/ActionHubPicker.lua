@@ -1345,6 +1345,154 @@ function ActionHub:RefreshPickerList()
         local rows = math.max(math.ceil(#items / cols), 1)
         child:SetHeight(rows * (btnSize + spacing + 20) + 20)
         child:SetWidth(cols * (btnSize + spacing))
+    elseif dialog.selectedType == "module" then
+        -- Show Trigger Grid
+        dialog.scroll:Show()
+        dialog.editor:Hide()
+        dialog.settingsTabFrame:Hide()
+        dialog.showToysCheck:Hide()
+        dialog.showToysLabel:Hide()
+        dialog.toySearchBox:Hide()
+        dialog.allTriggersCheck:Hide()
+        dialog.allTriggersLabel:Hide()
+        dialog.allTriggersHelp:Hide()
+        dialog.sectionInfo:SetText("Pick a module window or setting for this slot")
+
+        -- Clear previous entries
+        for _, c in ipairs({child:GetChildren()}) do
+            c:Hide()
+            c:SetParent(nil)
+        end
+
+        -- Every module's windows, settings and on / off switch. See
+        -- ActionHub:GetModuleNodeChoices in ActionHubData.lua.
+        local items = {}
+        for _, choice in ipairs(ActionHub:GetModuleNodeChoices()) do
+            table.insert(items, { type = "module", id = choice.id, name = choice.action,
+                moduleName = choice.name, icon = choice.icon })
+        end
+
+        local btnSize = 48
+        local spacing = 8
+        local cols = 4
+        local x, y = 0, 0
+
+        for i, item in ipairs(items) do
+            local btn = CreateFrame("Button", nil, child, "BackdropTemplate")
+            btn:SetSize(btnSize, btnSize)
+            btn:SetPoint("TOPLEFT", child, "TOPLEFT", x * (btnSize + spacing) + 8, -y * (btnSize + spacing + 18) - 4)
+            btn:SetBackdrop({
+                bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+                edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+                tile = true, tileSize = 16, edgeSize = 10,
+            })
+            btn:SetBackdropColor(0.2, 0.1, 0.05, 0.8)
+            btn:SetBackdropBorderColor(0.4, 0.25, 0.1, 1)
+
+            local iconTex = btn:CreateTexture(nil, "ARTWORK")
+            iconTex:SetSize(btnSize - 6, btnSize - 6)
+            iconTex:SetPoint("CENTER", btn, "CENTER", 0, 0)
+            iconTex:SetTexture(item.icon)
+            iconTex:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+
+            local label = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            label:SetPoint("TOP", btn, "BOTTOM", 0, -2)
+            label:SetText(item.name)
+            label:SetWidth(btnSize + 4)
+            label:SetJustifyH("CENTER")
+            label:SetHeight(12)
+            label:SetTextColor(0.90, 0.85, 0.80, 1)
+
+            btn:SetScript("OnEnter", function(self)
+                self:SetBackdropBorderColor(1, 0.82, 0, 0.8)
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:SetText(item.moduleName or "", 1, 0.82, 0)
+                GameTooltip:AddLine(item.name, 1, 1, 1)
+                GameTooltip:Show()
+            end)
+            btn:SetScript("OnLeave", function(self)
+                self:SetBackdropBorderColor(0.4, 0.4, 0.4, 0.8)
+                GameTooltip:Hide()
+            end)
+
+            btn:SetScript("OnClick", function()
+                local slots = ActionHub:GetSlotsForSide(ActionHub:GetActiveHubDB(), dialog.slotSide)
+                if slots[dialog.slotIndex] then
+                    slots[dialog.slotIndex].type = "module"
+                    slots[dialog.slotIndex].id = item.id
+                    slots[dialog.slotIndex].assignmentMode = nil
+                end
+                ActionHub:RefreshTab()
+                ActionHub:RefreshPickerList()
+            end)
+
+            -- Drag support
+            btn:RegisterForDrag("LeftButton")
+            btn:SetScript("OnDragStart", function(self)
+                ActionHub.dragData = { type = "module", id = item.id, icon = item.icon }
+                if not ActionHub.dragIcon then
+                    local f = CreateFrame("Frame", nil, UIParent)
+                    f:SetSize(32, 32)
+                    f:SetFrameStrata("TOOLTIP")
+                    local t = f:CreateTexture(nil, "OVERLAY")
+                    t:SetAllPoints()
+                    f.tex = t
+                    ActionHub.dragIcon = f
+                end
+                ActionHub.dragIcon.tex:SetTexture(item.icon)
+                ActionHub.dragIcon:Show()
+                ActionHub.dragIcon:SetScript("OnUpdate", function(self)
+                    local cx, cy = GetCursorPosition()
+                    local s = UIParent:GetEffectiveScale()
+                    self:ClearAllPoints()
+                    self:SetPoint("CENTER", UIParent, "BOTTOMLEFT", cx/s, cy/s)
+                end)
+            end)
+            btn:SetScript("OnDragStop", function(self)
+                if ActionHub.dragIcon then
+                    ActionHub.dragIcon:Hide()
+                    ActionHub.dragIcon:SetScript("OnUpdate", nil)
+                end
+                if ActionHub.dragData then
+                    local dropTarget = nil
+                    local tab = ActionHub.tab
+                    if tab and tab.ringButtons then
+                        for _, rb in ipairs(tab.ringButtons) do
+                            local isOver = false
+                            if rb and rb.IsMouseOver then
+                                isOver = rb:IsMouseOver()
+                            elseif rb and type(_G.MouseIsOver) == "function" then
+                                isOver = _G.MouseIsOver(rb)
+                            end
+                            if rb and rb:IsShown() and rb.isActionHubSlot and rb.slotIndex and isOver then
+                                dropTarget = rb
+                                break
+                            end
+                        end
+                    end
+                    if dropTarget then
+                        local slots = ActionHub:GetSlotsForSide(ActionHub:GetActiveHubDB(), dropTarget.slotSide)
+                        local s = slots[dropTarget.slotIndex]
+                        if s then
+                            s.type = ActionHub.dragData.type
+                            s.id = ActionHub.dragData.id
+                            s.assignmentMode = nil
+                        end
+                        ActionHub:RefreshTab()
+                        ActionHub:RefreshWidget()
+                    end
+                    ActionHub.dragData = nil
+                end
+                ClearCursor()
+            end)
+
+            x = x + 1
+            if x >= cols then x = 0 y = y + 1 end
+        end
+
+        local rows = math.max(math.ceil(#items / cols), 1)
+        child:SetHeight(rows * (btnSize + spacing + 20) + 20)
+        child:SetWidth(cols * (btnSize + spacing))
     elseif dialog.selectedType == "marker" then
         -- Show Marker Grid (Raid Targets + Flares + Pings)
         dialog.scroll:Show()

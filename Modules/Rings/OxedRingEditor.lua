@@ -478,6 +478,9 @@ local function RefreshPreview()
             local mapping = OxedHub.db.profile.customReactions and OxedHub.db.profile.customReactions[data.id]
             local customIcon = mapping and mapping.icon
             displayIcon = data.icon or customIcon or "Interface\\Icons\\Spell_Holy_AshesToAshes"
+        elseif data.type == "module" then
+            local AH = OxedHub.ActionHub
+            displayIcon = (AH and AH.GetModuleNodeIcon and AH:GetModuleNodeIcon(data.id)) or data.icon or displayIcon
         elseif data.type == "trigger" then
             local trg = OxedHub.db.profile.triggers[data.id]
             if trg then
@@ -736,6 +739,7 @@ function OxedRingEditor:UpdateSidebarVisibility()
         item = true,
         mount = true,
         spell = false,
+        module = true,
         settings = true,
     }
     local visibleTabs = OxedHub.GetRingDB().oxedRingVisibleTabs
@@ -744,9 +748,11 @@ function OxedRingEditor:UpdateSidebarVisibility()
     -- key would otherwise read as "shown"). Only nil is migrated, so once the
     -- player toggles it their choice sticks.
     if visibleTabs.spell == nil then visibleTabs.spell = false end
+    -- Modules is new: shown until the player hides it.
+    if visibleTabs.module == nil then visibleTabs.module = true end
 
     if not visibleTabs[dialog.selectedType] then
-        for _, catType in ipairs({"toy", "emote", "marker", "item", "mount", "spell", "settings"}) do
+        for _, catType in ipairs({"toy", "emote", "marker", "item", "mount", "spell", "module", "settings"}) do
             if visibleTabs[catType] then
                 dialog.selectedType = catType
                 break
@@ -764,10 +770,10 @@ function OxedRingEditor:UpdateSidebarVisibility()
         end
     end
 
-    local startY = -120
+    local startY = -92
     for idx, container in ipairs(visibleButtons) do
         container:ClearAllPoints()
-        container:SetPoint("TOPLEFT", dialog, "TOPLEFT", -34, startY - ((idx - 1) * 52))
+        container:SetPoint("TOPLEFT", dialog, "TOPLEFT", -34, startY - ((idx - 1) * 48))
     end
 end
 
@@ -1730,6 +1736,77 @@ function OxedRingEditor:RefreshPickerList()
         child:SetHeight(rows * (btnSize + spacing) + 16)
         child:SetWidth(cols * (btnSize + spacing))
 
+    elseif dialog.selectedType == "module" then
+        self.assignmentScroll:ClearAllPoints()
+        self.assignmentScroll:SetPoint("TOPLEFT", rightPanel, "TOPLEFT", 16, -80)
+        self.assignmentScroll:SetPoint("BOTTOMRIGHT", rightPanel, "BOTTOMRIGHT", -55, 36)
+        self.assignmentScroll:Show()
+        self.assignmentScrollChild:Show()
+        self.assignmentInfo:SetText("Pick a module action")
+        for _, c in ipairs({child:GetChildren()}) do c:Hide() end
+
+        local AH = OxedHub.ActionHub
+        local items = (AH and AH.GetModuleNodeChoices) and AH:GetModuleNodeChoices(true) or {}
+        local btnSize, spacing, cols = 42, 20, 5
+        local x, y = 0, 0
+        for _, item in ipairs(items) do
+            local btn = track(CreateFrame("Button", nil, child, "BackdropTemplate"))
+            btn:SetSize(btnSize, btnSize)
+            btn:SetPoint("TOPLEFT", child, "TOPLEFT", x * (btnSize + 6) + 12, -y * (btnSize + spacing) - 4)
+            btn:SetBackdrop({
+                bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+                edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+                tile = true, tileSize = 16, edgeSize = 8,
+            })
+            btn:SetBackdropColor(0.1, 0.1, 0.1, 0.7)
+            btn:SetBackdropBorderColor(0.4, 0.4, 0.4, 0.8)
+
+            local iconTex = btn:CreateTexture(nil, "ARTWORK")
+            iconTex:SetSize(btnSize - 6, btnSize - 6)
+            iconTex:SetPoint("CENTER", btn, "CENTER", 0, 0)
+            iconTex:SetTexture(item.icon)
+            iconTex:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+
+            local label = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+            label:SetPoint("TOP", btn, "BOTTOM", 0, -1)
+            label:SetWidth(btnSize + 4)
+            label:SetWordWrap(false)
+            label:SetText(item.action)
+
+            btn:SetScript("OnEnter", function(self)
+                self:SetBackdropBorderColor(1, 0.82, 0, 0.8)
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:SetText(item.name)
+                GameTooltip:AddLine(item.action, 1, 1, 1)
+                GameTooltip:AddLine("|cff00ff00Click to assign to this slot|r")
+                GameTooltip:Show()
+            end)
+            btn:SetScript("OnLeave", function(self)
+                self:SetBackdropBorderColor(0.4, 0.4, 0.4, 0.8)
+                GameTooltip:Hide()
+            end)
+            btn:SetScript("OnClick", function()
+                if currentSlot then
+                    currentSlot.type = "module"
+                    currentSlot.id = item.id
+                    currentSlot.label = item.name .. ": " .. item.action
+                    currentSlot.icon = item.icon
+                    currentSlot.assignmentMode = nil
+                    currentSlot.requiresParty = nil
+                    currentSlot.requiresTarget = nil
+                end
+                RefreshPreview()
+                OxedRingEditor:RefreshAssignmentPanel()
+            end)
+            MakeButtonDraggable(btn, { type = "module", id = item.id, name = item.name .. ": " .. item.action, icon = item.icon })
+
+            x = x + 1
+            if x >= cols then x = 0 y = y + 1 end
+        end
+        local rows = math.max(math.ceil(#items / cols), 1)
+        child:SetHeight(rows * (btnSize + spacing) + 16)
+        child:SetWidth(cols * (btnSize + 6))
+
     elseif dialog.selectedType == "settings" then
         self.assignmentScroll:SetScrollChild(rightPanel.settingsScrollChild)
         self.assignmentScroll:ClearAllPoints()
@@ -1796,7 +1873,7 @@ function OxedRingEditor:RefreshPickerList()
         end
 
         local vTabs = OxedHub.GetRingDB().oxedRingVisibleTabs or {
-            toy = true, emote = true, marker = true, item = true, mount = true, spell = false, settings = true
+            toy = true, emote = true, marker = true, item = true, mount = true, spell = false, module = true, settings = true
         }
         if dialog.sidebarCheckboxes then
             for k, check in pairs(dialog.sidebarCheckboxes) do
@@ -1815,8 +1892,8 @@ local function CreateDisconnectedAssignmentTabs(panel)
     panel.tabs = {}
     panel.tabsArray = {}
 
-    local tabNames = { "Toys", "Reactions", "Markers", "Items", "Mounts", "Spells", "Settings" }
-    local tabTypeByIndex = { "toy", "emote", "marker", "item", "mount", "spell", "settings" }
+    local tabNames = { "Toys", "Reactions", "Markers", "Items", "Mounts", "Spells", "Modules", "Settings" }
+    local tabTypeByIndex = { "toy", "emote", "marker", "item", "mount", "spell", "module", "settings" }
     local isRetail = (WOW_PROJECT_ID == WOW_PROJECT_MAINLINE)
     local template = isRetail and "CharacterFrameTabTemplate" or "CharacterFrameTabButtonTemplate"
 
@@ -2054,6 +2131,7 @@ function OxedRingEditor:CreateTab(contentArea)
         { name = "Items",     type = "item",     icon = 3753262 },
         { name = "Mounts",    type = "mount",    icon = 2143068 },
         { name = "Spells",    type = "spell",    icon = "Interface\\Icons\\INV_Misc_Book_09" },
+        { name = "Modules",   type = "module",   icon = "Interface\\Icons\\INV_Gizmo_02" },
         { name = "Settings",  type = "settings", icon = 4548872 }
     }
 
@@ -2954,6 +3032,7 @@ function OxedRingEditor:CreateTab(contentArea)
         { key = "mount",  label = L["TAB_MOUNTS"] or "Mounts" },
         { key = "item",   label = L["TAB_ITEMS"] or "Items" },
         { key = "spell",  label = L["TAB_SPELLS"] or "Spellbook" },
+        { key = "module", label = L["TAB_MODULE"] or "Modules" },
     }
 
     local prevAnchor = tabsHeader
@@ -2974,14 +3053,14 @@ function OxedRingEditor:CreateTab(contentArea)
 
         check:SetScript("OnClick", function(self)
             OxedHub.GetRingDB().oxedRingVisibleTabs = OxedHub.GetRingDB().oxedRingVisibleTabs or {
-                toy = true, emote = true, marker = true, item = true, mount = true, spell = false, settings = true
+                toy = true, emote = true, marker = true, item = true, mount = true, spell = false, module = true, settings = true
             }
             local vTabs = OxedHub.GetRingDB().oxedRingVisibleTabs
             vTabs[def.key] = self:GetChecked()
 
             -- Ensure at least one category tab remains shown
             local anyShown = false
-            for _, k in ipairs({"toy", "emote", "marker", "item", "mount", "spell"}) do
+            for _, k in ipairs({"toy", "emote", "marker", "item", "mount", "spell", "module"}) do
                 if vTabs[k] then
                     anyShown = true
                     break

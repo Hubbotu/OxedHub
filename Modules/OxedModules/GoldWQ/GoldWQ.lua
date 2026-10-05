@@ -1588,6 +1588,11 @@ loginFrame:SetScript("OnEvent", function(self)
 
         defaults = DEFAULTS,
 
+        -- On the minimap button's right-click menu and as an Action Hub node.
+        quick = {
+            { text = "Show or hide", func = function() toggleUI() end },
+        },
+
         OnOptionsShow = function()
             ShowOptions()
         end,
