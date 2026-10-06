@@ -25,6 +25,22 @@ local KIND_COLORS = {
 -- changed in between.
 WhatsNew.RELEASES = {
     {
+        version = "2.4.1",
+        important = true,
+        lines = {
+            { "NEW", "Boss Timers: bars for the boss abilities that are coming, in this season's dungeons and raids. Each ability is recognised, so each can be switched off or given its own sound, text and warning time in the Abilities window. Tank abilities only for tanks, healer abilities only for healers, colours by kind, and a full Look and Colours window." },
+            { "NEW", "Boss Alerts: a countdown in the middle of the screen for abilities about to land, a text alert as each one comes close, and the game's own boss warnings, each severity with a sound of its own." },
+            { "NEW", "Boss Track: abilities as icons sliding toward a line, and large glowing icons with a countdown as they land." },
+            { "NEW", "Boss Health: a health bar for each boss, marked where the fight changes phase." },
+            { "NEW", "Trash Timers: cooldowns of dangerous dungeon trash after each pull, shown by Boss Timers, Boss Alerts and Boss Track. An estimate: the game hides which mob is which in a fight." },
+            { "NEW", "Enemy Casts: every enemy and boss cast in one list, with who it is aimed at, a mark when it is aimed at you, and grey when it cannot be interrupted." },
+            { "NEW", "Party Interrupts: your interrupt's cooldown, and who in your group just interrupted what." },
+            { "NEW", "Action Hub: More options for each hub. Show it always, only in combat, hidden in combat or on mouseover, hide it while mounted, blue icons when short of mana, dimmed icons on cooldown, item counts, icon zoom, and the key text and tooltips in combat can be switched off." },
+            { "CHANGED", "Auto Gossip: picks the helper option in this season's dungeons (buffs, the cauldron, freeing prisoners) even when the NPC offers others." },
+            { "CHANGED", "Module options: the new modules link to each other, so the ones that work together are one click apart." },
+        },
+    },
+    {
         version = "2.4.0",
         important = true,
         lines = {

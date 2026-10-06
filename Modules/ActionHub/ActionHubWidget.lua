@@ -240,7 +240,8 @@ function ActionHub:CreateWidget(hubIndex)
     w.visibilityElapsed = 0
     w:SetScript("OnUpdate", function(self, elapsed)
         local hubDB = ActionHub:GetHubDB(self.hubIndex)
-        if hubDB and hubDB.onScreen and hubDB.hideInCombat then
+        if hubDB and hubDB.onScreen
+            and (ActionHub:GetVisibilityMode(hubDB) ~= "always" or hubDB.hideMounted) then
             self.visibilityElapsed = (self.visibilityElapsed or 0) + (elapsed or 0)
             if self.visibilityElapsed >= 0.05 then
                 self.visibilityElapsed = 0
@@ -424,10 +425,10 @@ function ActionHub:ApplyWidgetCombatVisibility(w, db)
         return
     end
 
-    local shouldHide = db.onScreen and db.hideInCombat and InCombatLockdown()
+    local shouldHide = ActionHub:ShouldFadeHub(db)
     local targetAlpha = 1
     if shouldHide then
-        targetAlpha = IsMouseOverActionHubWidget(w) and 1 or 0
+        targetAlpha = IsMouseOverActionHubWidget(w) and 1 or (db.fadedAlpha or 0)
     end
 
     w.combatTargetAlpha = targetAlpha
@@ -503,13 +504,12 @@ function ActionHub:UpdateCombatVisibilityTicker()
     local shouldRun = false
     local hubs = self:GetHubs() or {}
 
-    if InCombatLockdown() then
-        for i = 1, #hubs do
-            local hubDB = EnsureHubData(hubs[i], i)
-            if hubDB.onScreen and hubDB.hideInCombat then
-                shouldRun = true
-                break
-            end
+    -- Runs while any hub is faded, so hovering it brings it back.
+    for i = 1, #hubs do
+        local hubDB = EnsureHubData(hubs[i], i)
+        if self:ShouldFadeHub(hubDB) then
+            shouldRun = true
+            break
         end
     end
 
@@ -535,6 +535,8 @@ function ActionHub:EnsureCombatVisibilityEvents()
     local f = CreateFrame("Frame")
     f:RegisterEvent("PLAYER_REGEN_DISABLED")
     f:RegisterEvent("PLAYER_REGEN_ENABLED")
+    f:RegisterEvent("PLAYER_MOUNT_DISPLAY_CHANGED")
+    f:RegisterEvent("PLAYER_ENTERING_WORLD")
     f:SetScript("OnEvent", function()
         ActionHub:UpdateCombatVisibilityTicker()
     end)
@@ -2390,7 +2392,8 @@ function ActionHub:RefreshWidgetForHub(hubIndex)
 
         btn:SetScript("OnEnter", function(self)
             local s = self.slotData
-            if s and s.type and db.showTooltip ~= false then
+            if s and s.type and db.showTooltip ~= false
+                and not (db.tooltipInCombat == false and InCombatLockdown()) then
                 GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
                 if s.type == "toy" then
                     if GetToyAssignmentMode(s) == "direct" then

@@ -20,6 +20,7 @@ local DEFAULTS = {
     shiftSkip   = false,   -- holding Shift skips the module for that moment (player's choice)
     inInstances = true,   -- also inside dungeons, raids and delves
     report      = false,  -- a line in chat naming the option that was chosen
+    dungeonHelpers = true, -- the season dungeons' helper options, even among others
 }
 
 local settings          -- OxedHubDB.modules.autogossip, bound at login
@@ -31,6 +32,17 @@ local PREFIX = "|cff00ff00OxedHub:|r "
 -- Options identified by their icon. Only the ones this module refuses are
 -- listed: the inn ("make this inn your home") moves your hearthstone.
 local ICON_BINDER = 132052
+
+-- Helper options in this season's dungeons, picked even when the menu offers
+-- more than one: the buff an NPC hands out, the cauldron, freeing a prisoner.
+-- By gossip option id, which does not change with the client's language.
+local DUNGEON_HELPERS = {}
+for _, id in ipairs({
+    107065, 107081, 107082, 107083, 107088,                 -- dungeon buffs
+    107387, 107428, 137387,                                 -- the cauldron
+    138618, 136301, 136271, 136316, 136280, 136624,         -- rescuing prisoners
+    137133,                                                 -- a dungeon buff
+}) do DUNGEON_HELPERS[id] = true end
 
 -- Some menus answer an option by showing themselves again with the same single
 -- option -- a greeting that loops. Choosing it twice in quick succession from
@@ -66,6 +78,19 @@ local function OnGossipShow()
     if MenuHasQuests() then return end
 
     local options = C_GossipInfo.GetOptions() or {}
+
+    if settings.dungeonHelpers and IsInInstance() then
+        for _, option in ipairs(options) do
+            if option.gossipOptionID and DUNGEON_HELPERS[option.gossipOptionID] then
+                if settings.report and option.name then
+                    print(PREFIX .. ("chose |cffffd100%s|r."):format(option.name))
+                end
+                C_GossipInfo.SelectOption(option.gossipOptionID)
+                return
+            end
+        end
+    end
+
     if #options ~= 1 then return end
 
     local option = options[1]
@@ -110,9 +135,11 @@ local function ShowOptions()
     if not API or not settings then return end
 
     if not optionsWindow then
-        optionsWindow = API:CreateOptionsWindow("Auto Gossip", 420, 220)
+        optionsWindow = API:CreateOptionsWindow("Auto Gossip", 420, 250)
         optionsWindow:AddCheckbox(settings, "inInstances", "Also in dungeons, raids and delves",
             "Off, menus inside instances are always left for you to read.")
+        optionsWindow:AddCheckbox(settings, "dungeonHelpers", "Dungeon helpers: buffs, cauldron, prisoners",
+            "In this season's dungeons, the helper option is chosen even when the NPC offers others.")
         optionsWindow:AddCheckbox(settings, "report", "Say what was chosen in chat")
         optionsWindow:AddCheckbox(settings, "shiftSkip", "Hold Shift to read a menu yourself",
             "With this on, holding Shift while talking to an NPC leaves the menu to you.")

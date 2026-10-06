@@ -2,7 +2,7 @@
 ## Title: Oxed Hub
 ## Notes: Unified interface for sounds, animations, emotes, chat messages, and toys based on in-game events
 ## Author: https://customwowaddon.com/
-## Version: 2.4.0
+## Version: 2.4.1
 ## SavedVariables: OxedHubDB
 ## OptionalDeps: OxedHub_MemePack, OxedHub_GamingPack, OxedHub_CustomMedia
 ## Category: Audio
@@ -151,6 +151,16 @@ Modules\OxedModules\GoldWQ\GoldWQ.lua
 Modules\OxedModules\BResLustTracker\BResLustTracker.lua
 Modules\OxedModules\CurrencyTransfer\CurrencyTransfer.lua
 Modules\OxedModules\EasyExperienceBar\EasyExperienceBar.lua
+Modules\OxedModules\BossTimers\BossData.lua
+Modules\OxedModules\BossTimers\TrashData.lua
+Modules\OxedModules\BossTimers\BossEngine.lua
+Modules\OxedModules\BossTimers\BossTimers.lua
+Modules\OxedModules\BossTimers\BossAlerts.lua
+Modules\OxedModules\BossTimers\BossTrack.lua
+Modules\OxedModules\BossTimers\BossHealth.lua
+Modules\OxedModules\BossTimers\TrashTimers.lua
+Modules\OxedModules\EnemyCasts\EnemyCasts.lua
+Modules\OxedModules\PartyInterrupts\PartyInterrupts.lua
 Modules\Rings\OxedRing.lua
 Modules\Rings\OxedRingEditor.lua
 Modules\Search.lua

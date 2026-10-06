@@ -1301,12 +1301,12 @@ function UI:CreateDashboardTab()
     end)
 
     -- ───────────────────────────────────────────────────────────────
-    -- CARD 1: RELEASE NOTES (RELEASE 2.4.0)
+    -- CARD 1: RELEASE NOTES (RELEASE 2.4.1)
     -- ───────────────────────────────────────────────────────────────
     local relTitle = card1:CreateFontString(nil, "OVERLAY", "QuestFont_Shadow_Huge")
     relTitle:SetPoint("TOP", card1, "TOP", 0, -12)
     relTitle:SetTextColor(1, 0.82, 0, 1)
-    relTitle:SetText(L["RELEASE_TITLE"] or "Release 2.4.0")
+    relTitle:SetText(L["RELEASE_TITLE"] or "Release 2.4.1")
     local rName, rHeight, rFlags = relTitle:GetFont()
     if rName then relTitle:SetFont(rName, rHeight * 1.1, rFlags) end
 
@@ -1372,11 +1372,11 @@ function UI:CreateDashboardTab()
     -- describing features that shipped many versions ago -- so an update
     -- looked like nothing had changed. Keep it to what is actually new.
     local relLines = {
-        "•  New: every module can now go on Action Hub and OxedRing, from the new Modules tab.",
-        "•  Action Hub: left-click a module for its settings, right-click to switch it on or off.",
-        "•  OxedRing: each module has Settings, On / off and its own window (Gold: Show or hide).",
-        "•  Tab buttons on the left sit higher, so every tab fits on the rail.",
-        "•  ToyBox: right-click copies the link only, and it minimises in a fight.",
+        "•  New: Boss Timers, Boss Alerts, Boss Track and Boss Health for dungeons and raids.",
+        "•  New: Trash Timers, Enemy Casts and Party Interrupts for Mythic+.",
+        "•  Every boss ability can have its own sound, text and timing.",
+        "•  Action Hub: More options per hub: mouseover, combat only, mana and cooldown colours.",
+        "•  Find them all under Modules, Dungeons & PvP. They ship switched off.",
         "•  Grab either pack from CurseForge:",
     }
 

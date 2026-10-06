@@ -308,12 +308,228 @@ function ModuleAPI:CreateOptionsWindow(title, width, height)
         return note
     end
 
+    -- A slider for one number. A fresh slider holds 0 and the template moves
+    -- it while the window is laid out, so nothing is saved until it has been
+    -- told the real value. format gets the caption and the value: "%s: %d s".
+    function f:AddSlider(config, key, caption, minValue, maxValue, step, format, onChange)
+        local label = self:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        label:SetPoint("TOPLEFT", self, "TOPLEFT", 20, self.cursorY - 4)
+
+        local slider = CreateFrame("Slider", nil, self, "OptionsSliderTemplate")
+        slider:SetOrientation("HORIZONTAL")
+        slider:SetSize(190, 16)
+        slider:SetPoint("TOPLEFT", self, "TOPLEFT", self:GetWidth() - 230, self.cursorY - 5)
+        slider:SetMinMaxValues(minValue, maxValue)
+        slider:SetValueStep(step)
+        slider:SetObeyStepOnDrag(true)
+        for _, part in ipairs({ "Low", "High", "Text" }) do
+            local region = slider[part] or (slider:GetName() and _G[slider:GetName() .. part])
+            if region then region:SetText("") end
+        end
+
+        local ready, refreshing = false, false
+        local function Show(value) label:SetText((format or "%s: %s"):format(caption, value)) end
+        slider:SetScript("OnValueChanged", function(_, value)
+            value = math.floor(value / step + 0.5) * step
+            Show(value)
+            if refreshing or not ready then return end
+            config[key] = value
+            if onChange then onChange(value) end
+        end)
+        slider.Refresh = function()
+            refreshing = true
+            local value = tonumber(config[key]) or minValue
+            slider:SetValue(value)
+            Show(value)
+            refreshing = false
+            ready = true
+        end
+        table.insert(self.checks, slider)
+        self.cursorY = self.cursorY - 30
+        return slider
+    end
+
+    -- A sound choice for one setting: what is chosen, and a button that opens
+    -- the same Pick Sound window the triggers use. The setting holds an
+    -- OxedHub sound id; empty means "none chosen", and the module decides
+    -- what that plays. Play it with ModuleAPI:PlaySound.
+    function f:AddSoundPicker(config, key, caption, emptyText)
+        local label = self:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        label:SetPoint("TOPLEFT", self, "TOPLEFT", 20, self.cursorY - 6)
+        label:SetTextColor(0.8, 0.8, 0.8)
+
+        local function Refresh()
+            label:SetText((caption or "Sound") .. ": " .. ModuleAPI:SoundName(config[key], emptyText))
+        end
+
+        local button = CreateFrame("Button", nil, self, "UIPanelButtonTemplate")
+        button:SetSize(140, 22)
+        button:SetPoint("TOPLEFT", self, "TOPLEFT", self:GetWidth() - 180, self.cursorY - 2)
+        button:SetText("Choose a sound")
+        button:SetScript("OnClick", function()
+            local Triggers = OxedHub.Triggers
+            if not (Triggers and Triggers.ShowSoundPicker) then return end
+            local mock = { actions = { sound = config[key] or "" } }
+            Triggers:ShowSoundPicker(mock, "sound", function(id)
+                if not id or id == "" or id == "None" or id == "none" then
+                    config[key] = ""
+                else
+                    config[key] = id
+                end
+                Refresh()
+            end)
+        end)
+
+        button.Refresh = Refresh
+        table.insert(self.checks, button)
+        self.cursorY = self.cursorY - 30
+        return button
+    end
+
+    -- One of a few choices, as a button that steps to the next on a click
+    -- (right-click steps back). choices = { { value = "left", text = "Left" }, ... }
+    function f:AddChoice(config, key, caption, choices, onChange)
+        local label = self:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        label:SetPoint("TOPLEFT", self, "TOPLEFT", 20, self.cursorY - 6)
+        label:SetText(caption)
+
+        local button = CreateFrame("Button", nil, self, "UIPanelButtonTemplate")
+        button:SetSize(170, 22)
+        button:SetPoint("TOPLEFT", self, "TOPLEFT", self:GetWidth() - 210, self.cursorY - 2)
+        button:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+
+        local function Index()
+            for i, choice in ipairs(choices) do
+                if choice.value == config[key] then return i end
+            end
+            return 1
+        end
+        button.Refresh = function()
+            local choice = choices[Index()]
+            button:SetText(choice and choice.text or "")
+        end
+        button:SetScript("OnClick", function(_, mouse)
+            local i = Index() + (mouse == "RightButton" and -1 or 1)
+            if i > #choices then i = 1 elseif i < 1 then i = #choices end
+            config[key] = choices[i].value
+            button.Refresh()
+            if onChange then onChange(config[key]) end
+        end)
+
+        table.insert(self.checks, button)
+        self.cursorY = self.cursorY - 30
+        return button
+    end
+
+    -- A colour swatch for config[key] = { r, g, b }. The table must exist
+    -- before the window is built (never in DEFAULTS: it would be shared).
+    function f:AddColour(config, key, caption, onChange)
+        local label = self:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+        label:SetPoint("TOPLEFT", self, "TOPLEFT", 20, self.cursorY - 6)
+        label:SetText(caption)
+
+        local swatch = CreateFrame("Button", nil, self, "BackdropTemplate")
+        swatch:SetSize(40, 18)
+        swatch:SetPoint("TOPLEFT", self, "TOPLEFT", self:GetWidth() - 210, self.cursorY - 4)
+        swatch:SetBackdrop({ bgFile = "Interface\\Buttons\\WHITE8X8", edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
+        swatch:SetBackdropBorderColor(0, 0, 0, 1)
+
+        swatch.Refresh = function()
+            local c = config[key]
+            if type(c) == "table" then swatch:SetBackdropColor(c[1] or 1, c[2] or 1, c[3] or 1, 1) end
+        end
+        swatch:SetScript("OnClick", function()
+            local c = config[key]
+            if type(c) ~= "table" or not (ColorPickerFrame and ColorPickerFrame.SetupColorPickerAndShow) then return end
+            local before = { c[1], c[2], c[3] }
+            ColorPickerFrame:SetupColorPickerAndShow({
+                r = c[1], g = c[2], b = c[3],
+                swatchFunc = function()
+                    c[1], c[2], c[3] = ColorPickerFrame:GetColorRGB()
+                    swatch.Refresh()
+                    if onChange then onChange(c) end
+                end,
+                cancelFunc = function()
+                    c[1], c[2], c[3] = before[1], before[2], before[3]
+                    swatch.Refresh()
+                    if onChange then onChange(c) end
+                end,
+            })
+        end)
+
+        table.insert(self.checks, swatch)
+        self.cursorY = self.cursorY - 26
+        return swatch
+    end
+
+    -- Buttons to modules that work together with this one: each opens that
+    -- module's options, and says when the module is switched off.
+    function f:AddModuleLinks(caption, ids)
+        local label = self:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        label:SetPoint("TOPLEFT", self, "TOPLEFT", 20, self.cursorY - 4)
+        label:SetText(caption)
+        self.cursorY = self.cursorY - 22
+
+        local perRow = math.max(1, math.floor((self:GetWidth() - 40) / 140))
+        local shown = 0
+        for _, id in ipairs(ids) do
+            local mod = ModuleAPI.modules and ModuleAPI.modules[id]
+            if mod then
+                local col = shown % perRow
+                if shown > 0 and col == 0 then self.cursorY = self.cursorY - 26 end
+                local button = CreateFrame("Button", nil, self, "UIPanelButtonTemplate")
+                button:SetSize(134, 22)
+                button:SetPoint("TOPLEFT", self, "TOPLEFT", 20 + col * 140, self.cursorY)
+                button.Refresh = function()
+                    local on = ModuleAPI:IsModuleEnabled(id)
+                    button:SetText(on and mod.name or (mod.name .. " (off)"))
+                end
+                button:SetScript("OnClick", function()
+                    if mod.OnOptionsShow then pcall(mod.OnOptionsShow, mod) end
+                end)
+                button:SetScript("OnEnter", function(b)
+                    GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
+                    GameTooltip:SetText(mod.name)
+                    if mod.desc then GameTooltip:AddLine(mod.desc, 1, 1, 1, true) end
+                    if not ModuleAPI:IsModuleEnabled(id) then
+                        GameTooltip:AddLine("Switched off: switch it on on the Modules page.", 1, 0.5, 0.3, true)
+                    end
+                    GameTooltip:Show()
+                end)
+                button:SetScript("OnLeave", function() GameTooltip:Hide() end)
+                table.insert(self.checks, button)
+                shown = shown + 1
+            end
+        end
+        self.cursorY = self.cursorY - 30
+    end
+
     f:SetScript("OnShow", function(self)
         for _, box in ipairs(self.checks) do box.Refresh() end
     end)
 
     f:Hide()
     return f
+end
+
+-- The name of an OxedHub sound id, for an options window. The library is
+-- shared across characters where the player chose that.
+function ModuleAPI:SoundName(id, emptyText)
+    if not id or id == "" then return emptyText or "None" end
+    local library = (OxedHub.GetSharedCustomSounds and OxedHub:GetSharedCustomSounds())
+        or (OxedHub.db and OxedHub.db.profile and OxedHub.db.profile.customSounds) or {}
+    local sound = library[id]
+    return (sound and sound.name) or tostring(id)
+end
+
+-- Plays a sound chosen with AddSoundPicker through OxedHub's own player, so
+-- the player's "sounds off" switch is respected. Returns false when there was
+-- nothing to play, so the module can fall back to a game sound.
+function ModuleAPI:PlaySound(id)
+    if not id or id == "" then return false end
+    if not (OxedHub.Sounds and OxedHub.Sounds.Play) then return false end
+    local ok = pcall(OxedHub.Sounds.Play, OxedHub.Sounds, id)
+    return ok
 end
 
 -- ── The line under a row of tabs ────────────────────────────────────────────

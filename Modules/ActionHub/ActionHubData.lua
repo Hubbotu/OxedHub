@@ -110,6 +110,16 @@ local function EnsureHubData(db, idx)
     if db.showTooltip == nil then db.showTooltip = true end
     if db.enableRangeCheck == nil then db.enableRangeCheck = true end
     db.style = db.style or "square"
+    -- Buttons and visibility (the hub's "More options" window).
+    if db.hideMounted == nil then db.hideMounted = false end
+    if db.fadedAlpha == nil then db.fadedAlpha = 0 end
+    if db.manaTint == nil then db.manaTint = true end
+    if db.desatOnCooldown == nil then db.desatOnCooldown = false end
+    if db.cooldownAlpha == nil then db.cooldownAlpha = 1 end
+    if db.showItemCount == nil then db.showItemCount = true end
+    if db.iconZoom == nil then db.iconZoom = 8 end
+    if db.showKeybind == nil then db.showKeybind = true end
+    if db.tooltipInCombat == nil then db.tooltipInCombat = true end
     return db
 end
 
@@ -548,6 +558,28 @@ function ActionHub:GetHubDB(idx)
         hubs[idx] = EnsureHubData(hubs[idx], idx)
     end
     return hubs[idx]
+end
+
+-- When a hub is shown: "always", "hideCombat", "onlyCombat" or "mouseover".
+-- The older "Hide In Combat" tick box is the hideCombat mode, so both stay in
+-- step whichever one the player uses.
+function ActionHub:GetVisibilityMode(db)
+    if not db then return "always" end
+    local mode = db.visibility
+    if mode == "onlyCombat" or mode == "mouseover" then return mode end
+    return db.hideInCombat and "hideCombat" or "always"
+end
+
+-- Whether the hub should fade out right now (it comes back on mouseover).
+function ActionHub:ShouldFadeHub(db)
+    if not (db and db.onScreen) then return false end
+    local mode = self:GetVisibilityMode(db)
+    local combat = InCombatLockdown()
+    if mode == "hideCombat" and combat then return true end
+    if mode == "onlyCombat" and not combat then return true end
+    if mode == "mouseover" then return true end
+    if db.hideMounted and IsMounted and IsMounted() then return true end
+    return false
 end
 
 

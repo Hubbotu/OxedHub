@@ -490,40 +490,7 @@ local function ShowOptions()
         w:AddCheckbox(settings, "warn", "Sound before you land")
         AddSlider(w, "warnAt", "Sound this early", 3, 60, 1, "%s: %d s")
 
-        local soundLabel = w:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        soundLabel:SetPoint("TOPLEFT", w, "TOPLEFT", 20, w.cursorY - 6)
-        soundLabel:SetTextColor(0.8, 0.8, 0.8)
-        soundLabel:SetText("Landing sound: " .. SoundName(settings.sound))
-        w.soundLabel = soundLabel
-
-        local pickSound = CreateFrame("Button", nil, w, "UIPanelButtonTemplate")
-        pickSound:SetSize(140, 22)
-        pickSound:SetPoint("TOPLEFT", w, "TOPLEFT", 250, w.cursorY - 2)
-        pickSound:SetText("Choose a sound")
-        pickSound:SetScript("OnClick", function()
-            if OxedHub.Triggers and OxedHub.Triggers.ShowSoundPicker then
-                local current = settings.sound or ""
-                local mock = { actions = { sound = current } }
-                OxedHub.Triggers:ShowSoundPicker(
-                    mock,
-                    "sound",
-                    function(id)
-                        if not id or id == "" or id == "None" or id == "none" then
-                            settings.sound = ""
-                        else
-                            settings.sound = id
-                        end
-                        if w.soundLabel then
-                            w.soundLabel:SetText("Landing sound: " .. SoundName(settings.sound))
-                        end
-                    end
-                )
-            end
-        end)
-        w.cursorY = w.cursorY - 30
-        w:HookScript("OnShow", function()
-            soundLabel:SetText("Landing sound: " .. SoundName(settings.sound))
-        end)
+        w:AddSoundPicker(settings, "sound", "Landing sound", "The game's ready check sound")
 
         w:AddCheckbox(settings, "locked", "Lock the bar",
             "Unlocked, drag the bar with the left button.")

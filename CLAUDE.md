@@ -192,10 +192,30 @@ Follow the existing ones (`AutoVendor`, `AutoBanker`, `CopyChat`, `Attributes`):
   card toggles them live, with no reload.
 - `category` must be one of the keys in `ModuleAPI.CATEGORIES`; anything else
   silently becomes `quests` (the old keys `general`, `pvp`, `inventory`, `interface`, `tools` are mapped by `OLD_CATEGORY`).
-- Options windows come from `API:CreateOptionsWindow`, which offers
-  `AddCheckbox` and `AddNote` only.
+- Options windows come from `API:CreateOptionsWindow`: `AddCheckbox`, `AddSlider`,
+  `AddChoice` (a button stepping through values), `AddColour` (config[key] = {r,g,b},
+  built after binding), `AddSoundPicker` (play the choice with `API:PlaySound`),
+  `AddModuleLinks` (buttons to related modules) and `AddNote`. Keep a window under
+  about 700 high; split into a second window rather than run off the screen.
 - Modules in `OxedModules` are written in plain English, not through the
   `Locales` tables. The rest of the addon does use `OxedHub.L`.
+
+## The boss modules
+
+`Modules\OxedModules\BossTimers\` holds a family of modules sharing one engine:
+
+- `BossEngine.lua` follows `C_EncounterTimeline` and recognises each ability by
+  its event's **duration** (the only plain field in a fight) against
+  `BossData.lua`. It draws nothing; displays read `GetEvents()` and listen.
+  Other modules add timed events with `AddCustomEvent` (Trash Timers does).
+- Boss Timers (bars, and the per-ability settings every display shares, in
+  `OxedHubDB.modules.bosstimers.abilities["<encounter>:<event>"]`), Boss Alerts,
+  Boss Track, Boss Health, Trash Timers. Enemy Casts and Party Interrupts sit
+  beside them and are linked from their options.
+- `BossData.lua` and `TrashData.lua` are generated; never edit by hand. Never
+  name where the data came from anywhere in the addon or the repo.
+- An unrecognised event's name and icon are **secret**: hand them to
+  SetText / SetTexture only. `ev.name or ""` is already an error.
 
 ## Sending items to the server
 

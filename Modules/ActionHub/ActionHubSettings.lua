@@ -136,6 +136,20 @@ function ActionHub:CreateTab(contentArea)
     tab.hubRow = hubRow
     tab.hubBtns = {}
 
+    -- Buttons and visibility for the selected hub, in a window of its own.
+    local moreBtn = CreateFrame("Button", nil, tab, "UIPanelButtonTemplate")
+    moreBtn:SetSize(130, 22)
+    moreBtn:SetPoint("LEFT", hubRow, "RIGHT", 10, 0)
+    moreBtn:SetText("More options")
+    moreBtn:SetScript("OnClick", function() ActionHub:ShowHubOptions() end)
+    moreBtn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+        GameTooltip:SetText("More options")
+        GameTooltip:AddLine("When the hub shows, mana and cooldown colours, item counts, icon zoom.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    moreBtn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
     -- Controls row
     local controls = CreateFrame("Frame", nil, tab)
     controls:SetPoint("TOPLEFT", hubRow, "BOTTOMLEFT", 0, -8)
@@ -152,6 +166,7 @@ function ActionHub:CreateTab(contentArea)
     hideCombatCheck:SetChecked(GetDB().hideInCombat)
     hideCombatCheck:SetScript("OnClick", function(self)
         GetDB().hideInCombat = self:GetChecked()
+        GetDB().visibility = self:GetChecked() and "hideCombat" or "always"
         ActionHub:UpdateCombatVisibilityTicker()
         ActionHub:RefreshWidget()
     end)
@@ -3512,3 +3527,56 @@ function ActionHub:ShowSlotPicker(slotIndex, slotSide)
     end
 end
 
+
+-- ── More options: buttons and visibility, per hub ─────────────────────────
+-- One window per hub, bound to that hub's saved table, built the first time
+-- it is asked for.
+local hubOptionWindows = {}
+
+local function RefreshHubLook()
+    ActionHub:RefreshAllWidgets()
+    ActionHub:UpdateCombatVisibilityTicker()
+    ActionHub:UpdateWidgetCooldowns()
+    ActionHub:UpdateItemCounts()
+end
+
+function ActionHub:ShowHubOptions()
+    local API = OxedHub.ModuleAPI
+    if not (API and API.CreateOptionsWindow) then return end
+    for _, w in pairs(hubOptionWindows) do w:Hide() end
+
+    local index = self:GetActiveHubIndex()
+    local db = self:GetActiveHubDB()
+    local w = hubOptionWindows[index]
+    if not w then
+        w = API:CreateOptionsWindow((db.name or ("Hub " .. index)) .. ": more options", 460, 520)
+        hubOptionWindows[index] = w
+
+        -- The visibility choice keeps the older "Hide In Combat" box in step.
+        db.visibility = self:GetVisibilityMode(db)
+        w:AddChoice(db, "visibility", "Show the hub", {
+            { value = "always", text = "Always" },
+            { value = "hideCombat", text = "Hidden in combat" },
+            { value = "onlyCombat", text = "Only in combat" },
+            { value = "mouseover", text = "On mouseover" },
+        }, function(value)
+            db.hideInCombat = (value == "hideCombat")
+            local tab = ActionHub.tab
+            if tab and tab.hideCombatToggle then tab.hideCombatToggle:SetChecked(db.hideInCombat) end
+            RefreshHubLook()
+        end)
+        w:AddCheckbox(db, "hideMounted", "Hide while mounted", nil, RefreshHubLook)
+        w:AddSlider(db, "fadedAlpha", "When hidden, opacity", 0, 1, 0.05, "%s: %.2f", RefreshHubLook)
+        w:AddNote("A hidden hub comes back while the mouse is over it.")
+
+        w:AddCheckbox(db, "manaTint", "Blue when short of mana or energy", nil, RefreshHubLook)
+        w:AddCheckbox(db, "desatOnCooldown", "Grey icons while on cooldown", nil, RefreshHubLook)
+        w:AddSlider(db, "cooldownAlpha", "Icon opacity on cooldown", 0.2, 1, 0.05, "%s: %.2f", RefreshHubLook)
+        w:AddCheckbox(db, "showItemCount", "How many of an item you carry", nil, RefreshHubLook)
+        w:AddCheckbox(db, "showKeybind", "Show the key on each node", nil, RefreshHubLook)
+        w:AddSlider(db, "iconZoom", "Icon zoom", 0, 20, 1, "%s: %d", RefreshHubLook)
+        w:AddCheckbox(db, "tooltipInCombat", "Tooltips in combat",
+            "Off, hovering a node in a fight shows no tooltip.")
+    end
+    w:Show()
+end

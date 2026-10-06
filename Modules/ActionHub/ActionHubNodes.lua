@@ -698,8 +698,9 @@ local function SlotUsableRaw(slot)
 
         if slot.type == "spell" then
             if C_Spell and C_Spell.IsSpellUsable then
-                local isUsable = C_Spell.IsSpellUsable(id)
-                if isUsable ~= nil then return isUsable and true or false end
+                -- The second answer: unusable only for want of mana/energy.
+                local isUsable, noMana = C_Spell.IsSpellUsable(id)
+                if isUsable ~= nil then return isUsable and true or false, noMana and true or false end
             end
             return true
         end
@@ -726,8 +727,8 @@ local function SlotUsableRaw(slot)
 end
 
 local function IsSlotUsable(slot)
-    local ok, usable = pcall(SlotUsableRaw, slot)
-    if ok then return usable end
+    local ok, usable, noMana = pcall(SlotUsableRaw, slot)
+    if ok then return usable, noMana end
     return true
 end
 
@@ -781,7 +782,9 @@ end
 -- it in the top-right corner; round ("ring") nodes get it centred and nudged
 -- down so the text stays inside the circle instead of hanging off the corner.
 local function UpdateBindingLabel(btn, slot, size, style)
+    local hub = btn.slotHubIndex and ActionHub:GetHubDB(btn.slotHubIndex)
     local text = slot and FormatBindingText(slot.binding)
+    if hub and hub.showKeybind == false then text = nil end
     if not text then
         if btn.bindingText then btn.bindingText:Hide() end
         return
@@ -1295,30 +1298,41 @@ local function ApplyButtonColoring(btn)
 
     local usable = (btn._ohUsable ~= false)
     local outOfRange = (btn._ohOutOfRange == true)
+    local hubDB = (btn.slotHubIndex and ActionHub:GetHubDB(btn.slotHubIndex))
+        or (btn:GetParent() and btn:GetParent().hubIndex and ActionHub:GetHubDB(btn:GetParent().hubIndex))
+        or ActionHub:GetActiveHubDB()
 
     local r, g, b = 1, 1, 1
     local desat = false
+    local alpha = 1
 
     if outOfRange then
-        local hubDB = (btn.slotHubIndex and ActionHub:GetHubDB(btn.slotHubIndex))
-            or (btn:GetParent() and btn:GetParent().hubIndex and ActionHub:GetHubDB(btn:GetParent().hubIndex))
-            or ActionHub:GetActiveHubDB()
         local rc = (hubDB and hubDB.rangeColor) or DEFAULT_RANGE_COLOR
         r = rc.r or rc[1] or 0.85
         g = rc.g or rc[2] or 0.25
         b = rc.b or rc[3] or 0.25
         desat = false
+    elseif not usable and btn._ohNoMana and not (hubDB and hubDB.manaTint == false) then
+        -- Short of mana or energy: blue, like the default bars.
+        r, g, b = 0.35, 0.45, 1
     elseif not usable then
         r, g, b = 0.4, 0.4, 0.4
         desat = true
     end
 
-    if btn._ohColorR == r and btn._ohColorG == g and btn._ohColorB == b 
-        and btn._ohDesat == desat and btn._ohUsableSplit == btn.splitIcon then
+    -- Dimmed while on cooldown, when the hub asks for it.
+    if btn._ohOnCooldown and hubDB then
+        if hubDB.desatOnCooldown then desat = true end
+        alpha = hubDB.cooldownAlpha or 1
+    end
+
+    if btn._ohColorR == r and btn._ohColorG == g and btn._ohColorB == b
+        and btn._ohDesat == desat and btn._ohAlpha == alpha and btn._ohUsableSplit == btn.splitIcon then
         return
     end
     btn._ohColorR, btn._ohColorG, btn._ohColorB = r, g, b
     btn._ohDesat = desat
+    btn._ohAlpha = alpha
     btn._ohUsableSplit = btn.splitIcon
 
     local textures = {}
@@ -1334,16 +1348,59 @@ local function ApplyButtonColoring(btn)
     for _, tex in ipairs(textures) do
         if tex.SetDesaturated then tex:SetDesaturated(desat) end
         tex:SetVertexColor(r, g, b)
+        tex:SetAlpha(alpha)
     end
 end
 
 -- Apply / clear the "can't use this right now" dimming on a button's icon(s).
-local function ApplyUsabilityShading(btn, usable)
+local function ApplyUsabilityShading(btn, usable, noMana)
     usable = usable and true or false
-    if btn._ohUsable == usable and btn._ohUsableSplit == btn.splitIcon then return end
+    noMana = noMana and true or false
+    if btn._ohUsable == usable and btn._ohNoMana == noMana and btn._ohUsableSplit == btn.splitIcon then return end
     btn._ohUsable = usable
+    btn._ohNoMana = noMana
     ApplyButtonColoring(btn)
 end
+
+-- How many of an item you carry, in the bottom corner of its node.
+local function UpdateItemCount(btn, slot, hub)
+    local show = slot and slot.type == "item" and slot.id and not (hub and hub.showItemCount == false)
+    local count
+    if show and C_Item and C_Item.GetItemCount then
+        local ok, value = pcall(C_Item.GetItemCount, tonumber(slot.id), false, true)
+        if ok and type(value) == "number" then count = value end
+    end
+    -- One of something (a trinket, a hearthstone) needs no number.
+    if not count or count == 1 then
+        if btn.itemCountText then btn.itemCountText:Hide() end
+        return
+    end
+    if not btn.itemCountText then
+        btn.itemCountText = btn:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
+        btn.itemCountText:SetDrawLayer("OVERLAY", 7)
+        btn.itemCountText:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", -2, 2)
+    end
+    btn.itemCountText:SetText(count)
+    btn.itemCountText:SetTextColor(count == 0 and 1 or 1, count == 0 and 0.3 or 1, count == 0 and 0.3 or 1)
+    btn.itemCountText:Show()
+end
+
+function ActionHub:UpdateItemCounts()
+    for _, w in ipairs(self.widgets or {}) do
+        if w and w.buttons then
+            local hub = self:GetHubDB(w.hubIndex)
+            for _, btn in ipairs(w.buttons) do
+                if btn.slotData and btn.slotData.type == "item" then
+                    UpdateItemCount(btn, btn.slotData, hub)
+                end
+            end
+        end
+    end
+end
+
+local itemCountFrame = CreateFrame("Frame")
+itemCountFrame:RegisterEvent("BAG_UPDATE_DELAYED")
+itemCountFrame:SetScript("OnEvent", function() ActionHub:UpdateItemCounts() end)
 
 local function GetDirectToyDisplay(itemID)
     local _, toyName, toyIcon = C_ToyBox.GetToyInfo(itemID)
@@ -1455,6 +1512,13 @@ local function UpdateNodeCooldown(btn)
     -- Charge counter sits outside the branches above: a spell
     -- can bank charges whether or not a cooldown is running.
     UpdateChargeCount(btn, spellID, hub and hub.style)
+    UpdateItemCount(btn, slot, hub)
+
+    local onCooldown = not isReady
+    if btn._ohOnCooldown ~= onCooldown then
+        btn._ohOnCooldown = onCooldown
+        ApplyButtonColoring(btn)
+    end
 
     ApplyReadyGlow(btn, isReady)
 end
@@ -2109,7 +2173,7 @@ local function StyleButton(btn, style, size, isPreview)
     end
 
     local innerSize = style == "ring" and (size - 2) or (size - 4)
-    local zoom = 8
+    local zoom = (styleHubDB and styleHubDB.iconZoom) or 8
     local iconSize = innerSize + zoom
     btn.icon:SetSize(iconSize, iconSize)
     if btn.splitIcon then
